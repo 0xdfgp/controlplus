@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { TextPart } from '../content/text-part.ts';
 import { Conversation } from '../entities/conversation.ts';
+import { Message } from '../entities/message.ts';
+import type { TerminalState } from '../entities/message.ts';
 import { ProviderUnavailable } from '../errors/provider-unavailable.ts';
+import { STOPPED_ANSWER_NOTICE } from '../policy/conversation-context.ts';
 import { ProductPolicy } from '../policy/product-policy.ts';
 import type { Clock } from '../ports/clock.ts';
 import type { IdGenerator } from '../ports/id-generator.ts';
@@ -13,6 +17,7 @@ import type {
 import { ConversationId } from '../value-objects/conversation-id.ts';
 import { MessageId } from '../value-objects/message-id.ts';
 import { ModelId } from '../value-objects/model-id.ts';
+import { Provenance } from '../value-objects/provenance.ts';
 import { Usage } from '../value-objects/usage.ts';
 import { AnswerGeneration } from './answer-generation.ts';
 import type { AnswerGenerationEvent } from './answer-generation.ts';
@@ -64,6 +69,34 @@ function conversation(): Conversation {
   return Conversation.start(ConversationId.fromString('conv-1'), now);
 }
 
+let historyCounter = 0;
+
+function userMessage(text: string): Message {
+  historyCounter += 1;
+  return Message.fromUser({
+    id: MessageId.fromString(`history-${historyCounter}`),
+    conversationId: ConversationId.fromString('conv-1'),
+    parts: [TextPart.of(text)],
+    createdAt: now,
+  });
+}
+
+function assistantMessage(text: string, state: TerminalState): Message {
+  historyCounter += 1;
+  return Message.fromAssistant({
+    id: MessageId.fromString(`history-${historyCounter}`),
+    conversationId: ConversationId.fromString('conv-1'),
+    parts: text.length > 0 ? [TextPart.of(text)] : [],
+    createdAt: now,
+    provenance: Provenance.aiGenerated(
+      ModelId.fromString('gemini-3.5-flash'),
+      'google',
+    ),
+    usage: Usage.fromCounts(1, 2, 3),
+    state,
+  });
+}
+
 function subject(port: TextGenerationPort): AnswerGeneration {
   return new AnswerGeneration(port, clock, idGenerator, ProductPolicy.current());
 }
@@ -84,7 +117,7 @@ describe('AnswerGeneration', () => {
       completion,
     ]);
 
-    const events = await collect(subject(port).run(conversation(), 'Is this a scam?'));
+    const events = await collect(subject(port).run(conversation(), [], 'Is this a scam?'));
 
     expect(events.map((e) => e.kind)).toEqual(['delta', 'delta', 'completed']);
     const last = events.at(-1);
@@ -107,7 +140,7 @@ describe('AnswerGeneration', () => {
       },
     ]);
 
-    const events = await collect(subject(port).run(conversation(), 'question'));
+    const events = await collect(subject(port).run(conversation(), [], 'question'));
     const last = events.at(-1);
     if (last?.kind !== 'completed') {
       throw new Error('expected the last event to be the completed message');
@@ -127,7 +160,7 @@ describe('AnswerGeneration', () => {
       completion,
     ]);
 
-    const events = await collect(subject(port).run(conversation(), 'question'));
+    const events = await collect(subject(port).run(conversation(), [], 'question'));
     const last = events.at(-1);
     if (last?.kind !== 'completed') {
       throw new Error('expected the last event to be the completed message');
@@ -141,7 +174,7 @@ describe('AnswerGeneration', () => {
   it('sends the product policy and the question to the port', async () => {
     const port = new ScriptedTextGeneration([completion]);
 
-    await collect(subject(port).run(conversation(), 'Is this text a scam?'));
+    await collect(subject(port).run(conversation(), [], 'Is this text a scam?'));
 
     expect(port.seenRequests).toHaveLength(1);
     expect(port.seenRequests[0]?.question).toBe('Is this text a scam?');
@@ -149,12 +182,80 @@ describe('AnswerGeneration', () => {
       ProductPolicy.current().version,
     );
   });
+});
 
+describe('AnswerGeneration, assembling the request', () => {
+  it('carries the product policy and the history in the order they were had', async () => {
+    const port = new ScriptedTextGeneration([completion]);
+
+    await collect(
+      subject(port).run(
+        conversation(),
+        [
+          userMessage('Is this text about my bank a scam?'),
+          assistantMessage('Yes. Do not click the link.', 'completed'),
+        ],
+        'And how do I do that on my phone?',
+      ),
+    );
+
+    const request = port.seenRequests[0];
+    expect(request?.policy.systemPrompt).toContain(
+      'If someone may be caught in a scam, say so plainly and early.',
+    );
+    // The exchange first, oldest first, then the question separately. A follow
+    // up read before what it follows is a different conversation.
+    expect(request?.history).toEqual([
+      { author: 'user', text: 'Is this text about my bank a scam?' },
+      { author: 'assistant', text: 'Yes. Do not click the link.' },
+    ]);
+    expect(request?.question).toBe('And how do I do that on my phone?');
+  });
+
+  it('does not put the new question in the history as well', async () => {
+    const port = new ScriptedTextGeneration([completion]);
+
+    await collect(
+      subject(port).run(conversation(), [userMessage('first')], 'second'),
+    );
+
+    expect(port.seenRequests[0]?.history.map((t) => t.text)).toEqual(['first']);
+  });
+
+  it('marks a stopped answer as unfinished rather than passing it off as one', async () => {
+    const port = new ScriptedTextGeneration([completion]);
+
+    await collect(
+      subject(port).run(
+        conversation(),
+        [
+          userMessage('Is this a scam?'),
+          assistantMessage('That message has ', 'stopped'),
+        ],
+        'Carry on please.',
+      ),
+    );
+
+    const assistantTurn = port.seenRequests[0]?.history[1];
+    expect(assistantTurn?.text).toContain('That message has ');
+    expect(assistantTurn?.text).toContain(STOPPED_ANSWER_NOTICE);
+  });
+
+  it('sends an empty history when nothing has been said yet', async () => {
+    const port = new ScriptedTextGeneration([completion]);
+
+    await collect(subject(port).run(conversation(), [], 'the first question'));
+
+    expect(port.seenRequests[0]?.history).toEqual([]);
+  });
+});
+
+describe('AnswerGeneration, driving the stream', () => {
   it('fails when the stream closes without a completion chunk', async () => {
     const port = new ScriptedTextGeneration([{ kind: 'text', text: 'half an ' }]);
 
     await expect(
-      collect(subject(port).run(conversation(), 'question')),
+      collect(subject(port).run(conversation(), [], 'question')),
     ).rejects.toBeInstanceOf(ProviderUnavailable);
   });
 
@@ -169,7 +270,7 @@ describe('AnswerGeneration', () => {
       },
     ]);
 
-    const events = await collect(subject(port).run(conversation(), 'question'));
+    const events = await collect(subject(port).run(conversation(), [], 'question'));
     const last = events.at(-1);
     if (last?.kind !== 'completed') {
       throw new Error('expected the last event to be the completed message');
@@ -183,7 +284,7 @@ describe('AnswerGeneration', () => {
   it('yields no delta for the started chunk: it is not answer text', async () => {
     const port = new ScriptedTextGeneration([completion]);
 
-    const events = await collect(subject(port).run(conversation(), 'question'));
+    const events = await collect(subject(port).run(conversation(), [], 'question'));
 
     expect(events.map((e) => e.kind)).toEqual(['completed']);
   });
@@ -223,7 +324,7 @@ describe('AnswerGeneration, when the consumer stops iterating', () => {
 
   it('hands back the partial answer as a stopped message', async () => {
     const stopped = await stopAfterFirstDelta(
-      subject(port()).run(conversation(), 'Is this a scam?'),
+      subject(port()).run(conversation(), [], 'Is this a scam?'),
     );
 
     if (stopped?.kind !== 'completed') {
@@ -235,7 +336,7 @@ describe('AnswerGeneration, when the consumer stops iterating', () => {
 
   it('attributes it from the started chunk, since no completion arrived', async () => {
     const stopped = await stopAfterFirstDelta(
-      subject(port()).run(conversation(), 'question'),
+      subject(port()).run(conversation(), [], 'question'),
     );
 
     if (stopped?.kind !== 'completed') {
@@ -248,7 +349,7 @@ describe('AnswerGeneration, when the consumer stops iterating', () => {
 
   it('records zero usage, because that is what the provider reported', async () => {
     const stopped = await stopAfterFirstDelta(
-      subject(port()).run(conversation(), 'question'),
+      subject(port()).run(conversation(), [], 'question'),
     );
 
     if (stopped?.kind !== 'completed') {
@@ -263,7 +364,7 @@ describe('AnswerGeneration, when the consumer stops iterating', () => {
 
   it('raises MessageCompleted carrying the stopped terminal state', async () => {
     const stopped = await stopAfterFirstDelta(
-      subject(port()).run(conversation(), 'question'),
+      subject(port()).run(conversation(), [], 'question'),
     );
 
     if (stopped?.kind !== 'completed') {
@@ -279,14 +380,14 @@ describe('AnswerGeneration, when the consumer stops iterating', () => {
     const scripted = port();
 
     await stopAfterFirstDelta(
-      subject(scripted).run(conversation(), 'question'),
+      subject(scripted).run(conversation(), [], 'question'),
     );
 
     expect(scripted.released).toBe(true);
   });
 
   it('keeps an empty answer rather than inventing one, when stopped before any text', async () => {
-    const generation = subject(port()).run(conversation(), 'question');
+    const generation = subject(port()).run(conversation(), [], 'question');
     const closing = await generation.return(undefined);
 
     // Nothing was iterated, so the port never opened and nothing named a
@@ -295,7 +396,7 @@ describe('AnswerGeneration, when the consumer stops iterating', () => {
   });
 
   it('hands nothing back once the turn has already completed', async () => {
-    const generation = subject(port()).run(conversation(), 'question');
+    const generation = subject(port()).run(conversation(), [], 'question');
     await collect(generation);
 
     const closing = await generation.return(undefined);
@@ -307,7 +408,7 @@ describe('AnswerGeneration, when the consumer stops iterating', () => {
 
   it('hands nothing back when the turn failed: a failure is not a stop', async () => {
     const failing = new ScriptedTextGeneration([{ kind: 'text', text: 'half' }]);
-    const generation = subject(failing).run(conversation(), 'question');
+    const generation = subject(failing).run(conversation(), [], 'question');
 
     await generation.next();
     await expect(generation.next()).rejects.toBeInstanceOf(ProviderUnavailable);

@@ -15,6 +15,10 @@ import {
 } from '../../test/fakes/scripted-text-generation.ts';
 import { Conversation } from '../domain/entities/conversation.ts';
 import { ProviderUnavailable } from '../domain/errors/provider-unavailable.ts';
+import {
+  CONTEXT_WINDOW_MESSAGES,
+  STOPPED_ANSWER_NOTICE,
+} from '../domain/policy/conversation-context.ts';
 import { ProductPolicy } from '../domain/policy/product-policy.ts';
 import type { TextGenerationPort } from '../domain/ports/text-generation-port.ts';
 import { AnswerGeneration } from '../domain/services/answer-generation.ts';
@@ -286,5 +290,159 @@ describe('AskQuestion, when the generation port throws', () => {
 
     expect(last.event.errorClass).toBe('ProviderUnavailable');
     expect(messages.assistantMessages()).toHaveLength(0);
+  });
+});
+
+describe('AskQuestion, assembling the conversation so far', () => {
+  const port = () =>
+    new ScriptedTextGeneration([
+      { kind: 'text', text: 'On your phone, ' },
+      { kind: 'text', text: 'open Settings.' },
+      completionChunk(),
+    ]);
+
+  async function ask(
+    useCase: AskQuestion,
+    question: string,
+  ): Promise<void> {
+    await collect(useCase.execute({ conversationId, question }));
+  }
+
+  it('sends the previous exchange with a follow up, oldest first', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+
+    await ask(useCase, 'Is this text about my bank a scam?');
+    await ask(useCase, 'And how do I do that on my phone?');
+
+    expect(scripted.seenRequests).toHaveLength(2);
+    expect(scripted.seenRequests[1]?.history.map((t) => t.text)).toEqual([
+      'Is this text about my bank a scam?',
+      'On your phone, open Settings.',
+    ]);
+    expect(scripted.seenRequests[1]?.history.map((t) => t.author)).toEqual([
+      'user',
+      'assistant',
+    ]);
+  });
+
+  it('sends no history with the first question of a conversation', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+
+    await ask(useCase, 'Is this a scam?');
+
+    expect(scripted.seenRequests[0]?.history).toEqual([]);
+  });
+
+  it('does not put the question in the history as well as in the request', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+
+    await ask(useCase, 'first question');
+    await ask(useCase, 'second question');
+
+    const second = scripted.seenRequests[1];
+    expect(second?.question).toBe('second question');
+    expect(second?.history.map((t) => t.text)).not.toContain('second question');
+  });
+
+  it('sends only the last N messages, however long the conversation runs', async () => {
+    const scripted = port();
+    const { useCase, messages } = build(scripted);
+
+    // Comfortably past the window, so the assertion is about the bound rather
+    // than about a conversation that happens to be short.
+    for (let turn = 0; turn < CONTEXT_WINDOW_MESSAGES; turn += 1) {
+      await ask(useCase, `question ${turn}`);
+    }
+
+    const last = scripted.seenRequests.at(-1);
+    expect(messages.saved.length).toBeGreaterThan(CONTEXT_WINDOW_MESSAGES);
+    expect(last?.history).toHaveLength(CONTEXT_WINDOW_MESSAGES);
+    // The oldest questions have fallen out of the window; the newest are in it.
+    expect(last?.history.map((t) => t.text)).not.toContain('question 0');
+    expect(last?.history.map((t) => t.text)).toContain(
+      `question ${CONTEXT_WINDOW_MESSAGES - 2}`,
+    );
+  });
+
+  it('includes a stopped answer, marked as unfinished', async () => {
+    const scripted = new ScriptedTextGeneration([
+      { kind: 'text', text: 'That message has ' },
+      { kind: 'text', text: 'two signs of a scam.' },
+      completionChunk(),
+    ]);
+    const { useCase, messages } = build(scripted);
+
+    // Stop the first turn partway: the route walking away is what a tap on
+    // Stop looks like from here.
+    for await (const event of useCase.execute({
+      conversationId,
+      question: 'Is this a scam?',
+    })) {
+      if (event.kind === 'delta') {
+        break;
+      }
+    }
+    expect(messages.assistantMessages()[0]?.state).toBe('stopped');
+
+    await collect(
+      useCase.execute({ conversationId, question: 'Carry on please.' }),
+    );
+
+    const followUp = scripted.seenRequests.at(-1);
+    const assistantTurn = followUp?.history.find(
+      (t) => t.author === 'assistant',
+    );
+    expect(assistantTurn?.text).toContain('That message has ');
+    expect(assistantTurn?.text).toContain(STOPPED_ANSWER_NOTICE);
+  });
+});
+
+describe('AskQuestion, when the history cannot be read', () => {
+  function buildFailing() {
+    const scripted = new ScriptedTextGeneration([completionChunk()]);
+    const built = build(scripted);
+    built.messages.historyFailure = new Error('connection terminated');
+    return { ...built, scripted };
+  }
+
+  it('fails the turn rather than answering with no context', async () => {
+    const { useCase } = buildFailing();
+
+    const events = await collect(
+      useCase.execute({ conversationId, question: 'And on my phone?' }),
+    );
+
+    expect(events.map((e) => e.kind)).toEqual(['failed']);
+    const failed = events[0];
+    if (failed?.kind !== 'failed') {
+      throw new Error('expected a failed event');
+    }
+    expect(failed.event.name).toBe('GenerationFailed');
+    expect(failed.event.conversationId.value).toBe('conv-1');
+  });
+
+  it('never reaches the provider, so no half-contextual answer is generated', async () => {
+    const { useCase, scripted } = buildFailing();
+
+    await collect(
+      useCase.execute({ conversationId, question: 'And on my phone?' }),
+    );
+
+    // The failure that would be worse than this one: a follow up answered
+    // confidently with no idea what it is following.
+    expect(scripted.seenRequests).toHaveLength(0);
+  });
+
+  it('writes nothing at all for the turn', async () => {
+    const { useCase, messages } = buildFailing();
+
+    await collect(
+      useCase.execute({ conversationId, question: 'And on my phone?' }),
+    );
+
+    expect(messages.saved).toHaveLength(0);
   });
 });

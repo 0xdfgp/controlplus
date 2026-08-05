@@ -19,12 +19,37 @@ export class InMemoryConversationRepository implements ConversationRepository {
 export class InMemoryMessageRepository implements MessageRepository {
   readonly saved: Message[] = [];
 
+  /**
+   * Set to make the history read fail, which is the database being unreachable
+   * at the moment a follow up needs its context.
+   */
+  historyFailure: Error | null = null;
+
   async save(message: Message): Promise<void> {
     this.saved.push(message);
   }
 
   async findByConversation(conversationId: ConversationId): Promise<Message[]> {
     return this.saved.filter((m) => m.conversationId.equals(conversationId));
+  }
+
+  /**
+   * Insertion order is the order, which is what the seq column buys the real
+   * adapter. Slicing from the end mirrors its ORDER BY seq DESC ... LIMIT.
+   */
+  async findRecentByConversation(
+    conversationId: ConversationId,
+    limit: number,
+  ): Promise<Message[]> {
+    if (this.historyFailure !== null) {
+      throw this.historyFailure;
+    }
+    if (limit <= 0) {
+      return [];
+    }
+    return this.saved
+      .filter((m) => m.conversationId.equals(conversationId))
+      .slice(-limit);
   }
 
   assistantMessages(): Message[] {

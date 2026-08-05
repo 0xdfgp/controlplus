@@ -8,12 +8,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AnswerView } from './answer-view.tsx';
+import { ConversationView } from './conversation-view.tsx';
 import { QuestionInput } from './question-input.tsx';
 import { StopButton } from './stop-button.tsx';
 import { SupportFooter } from './support-footer.tsx';
 import { theme } from './theme.ts';
-import { ThinkingIndicator } from './thinking-indicator.tsx';
 import { isInFlight } from './turn-machine.ts';
 import { useTurn } from './use-turn.ts';
 
@@ -26,16 +25,16 @@ export interface AskScreenProps {
  * The one screen. It reads the turn state machine and holds no state of its own
  * beyond the text being typed (ADR-022).
  *
- * Four shapes, from five states:
+ * Two shapes:
  *
- *   idle, nothing asked yet  the question, and nothing else
- *   thinking                 the waiting indicator, alone
- *   responding               the answer as it builds, and Stop
- *   idle / stopped / failed  the answer, and the input ready below it
+ *   nothing asked yet    the question, centred, and nothing else
+ *   anything else        the conversation scrolling above, the input below
  *
- * That last row is the implicit return: a finished turn leaves its answer where
- * it is and puts the way to ask again underneath. No "ask another question"
- * control, because the input already is one.
+ * That second shape is the implicit return ADR-022 asked for, now spread over a
+ * conversation rather than a single answer: a finished turn leaves its words
+ * where they are, earlier turns stay above it, and the way to ask again is
+ * always the same control in the same place. No "ask another question", because
+ * the input already is one.
  *
  * Deliberately absent, because the brief puts them in later slices: "Add a
  * photo" (S4), "Speak instead" (S5) and the AI disclosure chip (S6). E7 draws
@@ -53,7 +52,7 @@ export function AskScreen({
     setDraft('');
   };
 
-  const hasAnswered = turn.question.length > 0;
+  const started = turn.history.length > 0 || turn.question.length > 0;
   const canAsk = !isInFlight(turn.state);
 
   return (
@@ -63,9 +62,15 @@ export function AskScreen({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.body}>
-          {turn.state === 'thinking' ? <ThinkingIndicator /> : null}
-
-          {canAsk && !hasAnswered ? (
+          {started ? (
+            <ConversationView
+              history={turn.history}
+              state={turn.state}
+              question={turn.question}
+              answer={turn.answer}
+              errorMessage={turn.errorMessage}
+            />
+          ) : (
             <View style={styles.first}>
               <Text style={styles.heading}>What would you like help with?</Text>
               <QuestionInput
@@ -75,22 +80,13 @@ export function AskScreen({
                 onSend={send}
               />
             </View>
-          ) : null}
-
-          {hasAnswered && turn.state !== 'thinking' ? (
-            <AnswerView
-              state={turn.state}
-              question={turn.question}
-              answer={turn.answer}
-              errorMessage={turn.errorMessage}
-            />
-          ) : null}
+          )}
 
           {turn.state === 'responding' ? (
             <StopButton onPress={turn.stop} />
           ) : null}
 
-          {canAsk && hasAnswered ? (
+          {started && canAsk ? (
             <View style={styles.followUp}>
               <QuestionInput
                 draft={draft}
@@ -118,7 +114,7 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     marginBottom: theme.spacing(3),
   },
-  // The divider E7 draws: the answer above, the way to ask again below.
+  // The divider E7 draws: the conversation above, the way to ask again below.
   followUp: {
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,

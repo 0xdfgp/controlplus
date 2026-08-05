@@ -1,4 +1,4 @@
-import { ScrollView, StyleSheet, Text } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { theme } from './theme.ts';
 import type { TurnState } from './turn-machine.ts';
@@ -24,18 +24,26 @@ export interface AnswerViewProps {
   readonly question: string;
   readonly answer: string;
   readonly errorMessage: string | null;
+  /**
+   * Whether this is the turn happening now.
+   *
+   * Only the newest turn announces itself. Every past answer being a live
+   * region would mean a screen reader re-reading the whole conversation each
+   * time anything on the screen changed, which is worse than silence.
+   */
+  readonly live: boolean;
 }
 
 /**
- * The answer area, in every state that has an answer to show.
+ * One turn: what was asked, and what came back.
  *
  * One component rather than one per state, because the words on screen do not
  * move when the turn ends. E7 is explicit about it: a stopped answer keeps the
  * same text colour and the same layout as a live one, and gains only the small
- * label above it. Rebuilding the area would make the text jump at exactly the
- * moment the reader is mid-sentence.
+ * label above it. The same component draws a turn that finished several
+ * questions ago, so nothing shifts as it scrolls up either.
  *
- * Screen reader users are told the state changed either way: for them, text
+ * Screen reader users are told the newest state changed: for them, text
  * arriving silently is not a signal at all.
  */
 export function AnswerView({
@@ -43,23 +51,22 @@ export function AnswerView({
   question,
   answer,
   errorMessage,
+  live,
 }: AnswerViewProps): React.JSX.Element {
   const failed = errorMessage !== null && state === 'failed';
   const waiting = state === 'responding' && answer.length === 0 && !failed;
+  const announce = live ? 'polite' : 'none';
 
   return (
-    <ScrollView
-      style={styles.answerArea}
-      contentContainerStyle={styles.answerContent}
-    >
+    <View style={styles.turn}>
       {waiting ? (
-        <Text style={styles.stateLabel} accessibilityLiveRegion="polite">
+        <Text style={styles.stateLabel} accessibilityLiveRegion={announce}>
           {RESPONDING_LABEL}
         </Text>
       ) : null}
 
       {state === 'stopped' ? (
-        <Text style={styles.stoppedLabel} accessibilityLiveRegion="polite">
+        <Text style={styles.stoppedLabel} accessibilityLiveRegion={announce}>
           {STOPPED_LABEL}
         </Text>
       ) : null}
@@ -67,21 +74,22 @@ export function AnswerView({
       <Text style={styles.question}>You asked: “{question}”</Text>
 
       {failed ? (
-        <Text style={styles.error} accessibilityLiveRegion="polite">
+        <Text style={styles.error} accessibilityLiveRegion={announce}>
           {errorMessage}
         </Text>
       ) : (
-        <Text style={styles.answer} accessibilityLiveRegion="polite">
+        <Text style={styles.answer} accessibilityLiveRegion={announce}>
           {answer}
         </Text>
       )}
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  answerArea: { flex: 1 },
-  answerContent: { paddingVertical: theme.spacing(2) },
+  // Turns are separated by space rather than by a rule. A conversation of
+  // boxed-off exchanges reads as a form; this reads as a page.
+  turn: { marginBottom: theme.spacing(4) },
   stateLabel: {
     fontSize: 24,
     fontWeight: '600',

@@ -72,6 +72,7 @@ async function collect(events: readonly InteractionEvent[]) {
   const chunks: GenerationChunk[] = [];
   for await (const chunk of adapter.generate({
     policy: ProductPolicy.current(),
+    history: [],
     question: 'Is this a scam?',
   })) {
     chunks.push(chunk);
@@ -123,6 +124,7 @@ describe('GeminiTextGenerationAdapter, Gemini specifics', () => {
 
     for await (const _ of adapter.generate({
       policy: ProductPolicy.current(),
+      history: [],
       question: 'Is this a scam?',
     })) {
       void _;
@@ -132,8 +134,51 @@ describe('GeminiTextGenerationAdapter, Gemini specifics', () => {
     expect(opener.requests[0]?.systemInstruction).toContain(
       'Never write "simply" or "just".',
     );
-    expect(opener.requests[0]?.input).toBe('Is this a scam?');
+    expect(opener.requests[0]?.input).toEqual([
+      { role: 'user', content: 'Is this a scam?' },
+    ]);
     expect(opener.requests[0]?.model).toBe('gemini-3.5-flash');
+  });
+
+  it('sends the history before the question, assistant turns as the model role', async () => {
+    const { opener, adapter } = adapterFor(HAPPY_PATH_EVENTS);
+
+    for await (const _ of adapter.generate({
+      policy: ProductPolicy.current(),
+      history: [
+        { author: 'user', text: 'Is this text about my bank a scam?' },
+        { author: 'assistant', text: 'Yes. Do not click the link.' },
+      ],
+      question: 'And how do I do that on my phone?',
+    })) {
+      void _;
+    }
+
+    // Order is the whole point: a follow up read before the exchange it follows
+    // is a different conversation.
+    expect(opener.requests[0]?.input).toEqual([
+      { role: 'user', content: 'Is this text about my bank a scam?' },
+      { role: 'model', content: 'Yes. Do not click the link.' },
+      { role: 'user', content: 'And how do I do that on my phone?' },
+    ]);
+  });
+
+  it('leaves the history exactly as the domain assembled it', async () => {
+    const { opener, adapter } = adapterFor(HAPPY_PATH_EVENTS);
+    const marked = 'Half an answer.\n\n[This answer was stopped by the person before it was finished.]';
+
+    for await (const _ of adapter.generate({
+      policy: ProductPolicy.current(),
+      history: [{ author: 'assistant', text: marked }],
+      question: 'Please carry on.',
+    })) {
+      void _;
+    }
+
+    // The adapter translates roles and nothing else. What a stopped answer is
+    // called is product policy and was decided in the domain; an adapter that
+    // rewrote this would be one holding a business rule.
+    expect(opener.requests[0]?.input[0]?.content).toBe(marked);
   });
 
   it('falls back to the configured model when the provider omits it', async () => {
@@ -164,6 +209,7 @@ describe('GeminiTextGenerationAdapter, Gemini specifics', () => {
       (async () => {
         for await (const _ of adapter.generate({
           policy: ProductPolicy.current(),
+          history: [],
           question: 'q',
         })) {
           void _;
@@ -178,6 +224,7 @@ describe('GeminiTextGenerationAdapter, Gemini specifics', () => {
     try {
       for await (const _ of adapter.generate({
         policy: ProductPolicy.current(),
+        history: [],
         question: 'q',
       })) {
         void _;

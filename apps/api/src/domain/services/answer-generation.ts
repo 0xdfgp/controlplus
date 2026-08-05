@@ -5,6 +5,7 @@ import { Message } from '../entities/message.ts';
 import type { TerminalState } from '../entities/message.ts';
 import { ProviderUnavailable } from '../errors/provider-unavailable.ts';
 import { MessageCompleted } from '../events/message-completed.ts';
+import { toGenerationTurns } from '../policy/conversation-context.ts';
 import type { ProductPolicy } from '../policy/product-policy.ts';
 import type { Clock } from '../ports/clock.ts';
 import type { IdGenerator } from '../ports/id-generator.ts';
@@ -38,9 +39,14 @@ export type AnswerGenerationEvent = AnswerDelta | AnswerCompleted;
 /**
  * Drives one turn of generation.
  *
- * Assembles the request from the product policy and the question, drives the
- * stream, and builds the Message with the provenance and usage the provider
- * reported.
+ * Assembles the request from the product policy, the conversation so far and
+ * the question, drives the stream, and builds the Message with the provenance
+ * and usage the provider reported.
+ *
+ * Assembly is here rather than in the use case because ADR-012 puts it here:
+ * in a product whose domain is conversing, deciding what the model is told is
+ * domain language. The use case reads the history; this decides what becomes of
+ * it.
  *
  * It does not persist. The use case decides when and whether to write.
  *
@@ -56,8 +62,13 @@ export class AnswerGeneration {
     private readonly policy: ProductPolicy,
   ) {}
 
+  /**
+   * @param history Earlier messages, oldest first, already bounded by the
+   *   context window. It does not contain `question`.
+   */
   async *run(
     conversation: Conversation,
+    history: readonly Message[],
     question: string,
   ): AsyncGenerator<AnswerGenerationEvent, void, undefined> {
     let answer = '';
@@ -70,6 +81,7 @@ export class AnswerGeneration {
 
       for await (const chunk of this.textGeneration.generate({
         policy: this.policy,
+        history: toGenerationTurns(history),
         question,
       })) {
         if (chunk.kind === 'started') {

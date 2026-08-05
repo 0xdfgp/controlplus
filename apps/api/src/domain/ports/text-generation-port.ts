@@ -1,11 +1,30 @@
+import type { MessageAuthor } from '../entities/message.ts';
 import type { ProductPolicy } from '../policy/product-policy.ts';
 import type { ModelId } from '../value-objects/model-id.ts';
 import type { Usage } from '../value-objects/usage.ts';
 
+/**
+ * One earlier turn of the conversation, already rendered by the domain.
+ *
+ * The adapter maps `author` onto whatever the provider calls its roles and does
+ * nothing else with it. Everything that decides what the model reads — the
+ * window, the order, how a stopped answer is marked — happened before this
+ * crossed the port.
+ */
+export interface GenerationTurn {
+  readonly author: MessageAuthor;
+  readonly text: string;
+}
+
 /** What the domain asks a generation provider for. One request per turn. */
 export interface GenerationRequest {
   readonly policy: ProductPolicy;
-  /** The user's question. Conversation history is S3. */
+  /**
+   * Earlier messages, oldest first, already bounded by the context window
+   * (ADR-023). The current question is not in here: it is the field below.
+   */
+  readonly history: readonly GenerationTurn[];
+  /** The user's question. */
   readonly question: string;
 }
 

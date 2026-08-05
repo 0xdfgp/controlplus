@@ -12,4 +12,16 @@ import type { ConversationId } from '../value-objects/conversation-id.ts';
 export interface MessageRepository {
   save(message: Message): Promise<void>;
   findByConversation(conversationId: ConversationId): Promise<Message[]>;
+  /**
+   * The most recent `limit` messages of a conversation, returned oldest first.
+   *
+   * The bound belongs to the query rather than to the caller's slicing, so a
+   * long conversation is never read into memory to have most of it discarded.
+   * `limit` comes from CONTEXT_WINDOW_MESSAGES; the repository does not know
+   * why that number is what it is.
+   */
+  findRecentByConversation(
+    conversationId: ConversationId,
+    limit: number,
+  ): Promise<Message[]>;
 }

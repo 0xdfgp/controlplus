@@ -40,6 +40,7 @@ async function collect(port: TextGenerationPort): Promise<GenerationChunk[]> {
   const chunks: GenerationChunk[] = [];
   for await (const chunk of port.generate({
     policy: ProductPolicy.current(),
+    history: [],
     question: 'Is this text about my bank a scam?',
   })) {
     chunks.push(chunk);
@@ -207,6 +208,7 @@ export function describeTextGenerationPortContract(
 
       for await (const chunk of port.generate({
         policy: ProductPolicy.current(),
+        history: [],
         question: 'Is this a scam?',
       })) {
         seen.push(chunk.kind);
@@ -230,6 +232,7 @@ export function describeTextGenerationPortContract(
       // before a single word arrived, and the provider must not keep billing.
       for await (const _chunk of port.generate({
         policy: ProductPolicy.current(),
+        history: [],
         question: 'Is this a scam?',
       })) {
         break;

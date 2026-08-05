@@ -1,4 +1,5 @@
 import {
+  bigint,
   index,
   jsonb,
   pgTable,
@@ -37,6 +38,14 @@ export const messages = pgTable(
     provenance: jsonb('provenance'),
     usage: jsonb('usage'),
     state: text('state'),
+    // Insert order, which for a Message is creation order: it is written once
+    // when the turn closes and never updated. It exists because created_at is
+    // millisecond precision and a question and its answer can share one, which
+    // would leave "the last N messages, in order" (ADR-023) undefined.
+    //
+    // Persistence only. The mapper does not read it and the domain does not
+    // know about it; the database assigns it.
+    seq: bigint('seq', { mode: 'number' }).generatedByDefaultAsIdentity(),
   },
   (table) => [index('messages_conversation_id_idx').on(table.conversationId)],
 );

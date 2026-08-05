@@ -235,6 +235,96 @@ describe('DrizzleMessageRepository', () => {
     expect(restored.map((m) => m.author)).toEqual(['user', 'assistant']);
   });
 
+  it('returns the last N messages oldest first, and no more', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    for (let index = 0; index < 8; index += 1) {
+      await messages.save(
+        Message.fromUser({
+          id: MessageId.fromString(`test-msg-w${index}-${counter}`),
+          conversationId,
+          parts: [TextPart.of(`question ${index}`)],
+          createdAt: new Date(createdAt.getTime() + index * 1000),
+        }),
+      );
+    }
+
+    const recent = await messages.findRecentByConversation(conversationId, 3);
+
+    expect(recent.map((m) => m.text())).toEqual([
+      'question 5',
+      'question 6',
+      'question 7',
+    ]);
+  });
+
+  it('orders a question and its answer written in the same millisecond', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    // The reason the seq column exists. created_at is a JS Date, so a turn that
+    // closes inside a millisecond gives both rows the same timestamp and no
+    // timestamp ordering can separate them.
+    await messages.save(
+      Message.fromUser({
+        id: MessageId.fromString(`test-msg-tie-u-${counter}`),
+        conversationId,
+        parts: [TextPart.of('Is this a scam?')],
+        createdAt,
+      }),
+    );
+    await messages.save(
+      Message.fromAssistant({
+        id: MessageId.fromString(`test-msg-tie-a-${counter}`),
+        conversationId,
+        parts: [TextPart.of('Yes. Do not click the link.')],
+        createdAt,
+        provenance: Provenance.aiGenerated(
+          ModelId.fromString('gemini-3.5-flash'),
+          'google',
+        ),
+        usage: Usage.fromCounts(1, 2, 3),
+        state: 'completed',
+      }),
+    );
+
+    const recent = await messages.findRecentByConversation(conversationId, 10);
+
+    expect(recent.map((m) => m.author)).toEqual(['user', 'assistant']);
+    expect(recent.map((m) => m.text())).toEqual([
+      'Is this a scam?',
+      'Yes. Do not click the link.',
+    ]);
+  });
+
+  it('returns everything when the conversation is shorter than the window', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    await messages.save(
+      Message.fromUser({
+        id: MessageId.fromString(`test-msg-short-${counter}`),
+        conversationId,
+        parts: [TextPart.of('only question')],
+        createdAt,
+      }),
+    );
+
+    const recent = await messages.findRecentByConversation(conversationId, 10);
+
+    expect(recent.map((m) => m.text())).toEqual(['only question']);
+  });
+
+  it('returns nothing for a conversation with no messages', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    expect(await messages.findRecentByConversation(conversationId, 10)).toEqual(
+      [],
+    );
+  });
+
   it('refuses a second write of the same message id', async () => {
     const conversationId = nextConversationId();
     await conversations.save(Conversation.start(conversationId, createdAt));

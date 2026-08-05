@@ -65,7 +65,14 @@ function dotRamp(index: number): number[] {
 }
 
 const styles = StyleSheet.create({
-  container: { alignItems: 'center', justifyContent: 'center', flex: 1 },
+  // No flex here: the indicator now sits inside the conversation, below the
+  // question just asked, and filling the region would push the earlier turns
+  // off a screen the brief requires to stay visible.
+  container: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: theme.spacing(4),
+  },
   dots: { flexDirection: 'row', marginBottom: theme.spacing(2) },
   dot: {
     width: 14,

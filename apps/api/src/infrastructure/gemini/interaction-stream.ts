@@ -14,10 +14,23 @@ export interface InteractionStreamOpener {
   open(request: InteractionStreamRequest): Promise<InteractionStream>;
 }
 
+/**
+ * One turn of the conversation in the provider's own vocabulary.
+ *
+ * `model` is what Gemini calls the assistant side. The mapping from the
+ * domain's author names happens in the adapter; by the time a turn is one of
+ * these it is provider shaped.
+ */
+export interface InteractionTurn {
+  readonly role: 'user' | 'model';
+  readonly content: string;
+}
+
 export interface InteractionStreamRequest {
   readonly model: string;
   readonly systemInstruction: string;
-  readonly input: string;
+  /** The conversation so far, oldest first, ending with the new question. */
+  readonly input: readonly InteractionTurn[];
 }
 
 /**
@@ -45,7 +58,17 @@ export class GeminiInteractionStreamOpener implements InteractionStreamOpener {
     const stream = await this.client.interactions.create({
       model: request.model,
       system_instruction: request.systemInstruction,
-      input: request.input,
+      // A list of turns rather than a bare string, which is how the same
+      // endpoint carries a conversation rather than a single question.
+      input: request.input.map((turn) => ({
+        role: turn.role,
+        content: turn.content,
+      })),
+      // ADR-021. Inside generation_config, which is the placement the live
+      // probe found: at the top level the parameter is rejected as unknown.
+      // Reasoning was 76 to 90 per cent of billed generation and 18 to 52
+      // seconds of dead air, none of which the user ever sees.
+      generation_config: { thinking_level: 'minimal' },
       stream: true,
     });
 

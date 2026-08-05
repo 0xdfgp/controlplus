@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm';
+import { asc, desc, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import type { Message } from '../../domain/entities/message.ts';
@@ -26,8 +26,37 @@ export class DrizzleMessageRepository implements MessageRepository {
       .select()
       .from(messages)
       .where(eq(messages.conversationId, conversationId.value))
-      .orderBy(asc(messages.createdAt));
+      .orderBy(asc(messages.seq));
 
     return rows.map(toMessage);
+  }
+
+  /**
+   * The most recent `limit` messages, oldest first.
+   *
+   * Newest-first with a LIMIT and then reversed, rather than reading the
+   * conversation and slicing: the database returns N rows however long the
+   * conversation is, which is what stops the request growing without bound.
+   *
+   * Ordered by seq, not by created_at. Two messages written in the same
+   * millisecond — a question and its answer, routinely — have no order under a
+   * timestamp, and "in order" is the whole point of the query.
+   */
+  async findRecentByConversation(
+    conversationId: ConversationId,
+    limit: number,
+  ): Promise<Message[]> {
+    if (limit <= 0) {
+      return [];
+    }
+
+    const rows = await this.db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId.value))
+      .orderBy(desc(messages.seq))
+      .limit(limit);
+
+    return rows.reverse().map(toMessage);
   }
 }

@@ -3,6 +3,7 @@ import { Conversation } from '../domain/entities/conversation.ts';
 import { Message } from '../domain/entities/message.ts';
 import { GenerationFailed } from '../domain/events/generation-failed.ts';
 import type { MessageCompleted } from '../domain/events/message-completed.ts';
+import { CONTEXT_WINDOW_MESSAGES } from '../domain/policy/conversation-context.ts';
 import type { Clock } from '../domain/ports/clock.ts';
 import type { ConversationRepository } from '../domain/ports/conversation-repository.ts';
 import type { IdGenerator } from '../domain/ports/id-generator.ts';
@@ -43,9 +44,9 @@ export type AskQuestionEvent =
 /**
  * One turn: a question in, a streamed answer out, both recorded.
  *
- * Creates or loads the conversation, builds the user Message, drives
- * AnswerGeneration, and writes the assistant Message exactly once when the turn
- * closes (ADR-013).
+ * Creates or loads the conversation, reads the recent history, builds the user
+ * Message, drives AnswerGeneration, and writes the assistant Message exactly
+ * once when the turn closes (ADR-013).
  *
  * A generation failure is not thrown at the caller. It comes back as a `failed`
  * event carrying GenerationFailed, and no assistant message row is written.
@@ -65,6 +66,29 @@ export class AskQuestion {
   ): AsyncGenerator<AskQuestionEvent, void, undefined> {
     const conversation = await this.loadOrStart(input.conversationId);
 
+    // Read before the question is written, so the history is the conversation
+    // up to this turn and the question is not in it twice. The bound is a
+    // message count from the domain (ADR-023); this layer does not choose it.
+    let history: Message[];
+    try {
+      history = await this.messages.findRecentByConversation(
+        conversation.id,
+        CONTEXT_WINDOW_MESSAGES,
+      );
+    } catch (caught) {
+      // The context could not be read, so the only alternatives were asking the
+      // model a follow up with no idea what it is following, or saying so. A
+      // silently context-free answer is the worse of the two: it reads as a
+      // confident reply to a question nobody asked.
+      const error = caught instanceof Error ? caught : new Error(String(caught));
+      yield {
+        kind: 'failed',
+        error,
+        event: GenerationFailed.from(conversation.id, error, this.clock.now()),
+      };
+      return;
+    }
+
     // A user message is complete the moment it is built: there is nothing to
     // stream, so the turn has already closed for it.
     await this.messages.save(
@@ -81,7 +105,11 @@ export class AskQuestion {
     // answer as a stopped Message on the way out. `for await` calls `return()`
     // on our behalf and discards whatever comes back, which would silently drop
     // that write.
-    const generation = this.answerGeneration.run(conversation, input.question);
+    const generation = this.answerGeneration.run(
+      conversation,
+      history,
+      input.question,
+    );
 
     try {
       while (true) {
