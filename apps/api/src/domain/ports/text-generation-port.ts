@@ -9,6 +9,24 @@ export interface GenerationRequest {
   readonly question: string;
 }
 
+/**
+ * The first chunk of any generation, successful or not.
+ *
+ * It exists so that a turn is attributable from its first moment. A cancelled
+ * stream never reaches the completion chunk, and a Message cannot be built
+ * without provenance, so without this the partial answer of a stopped turn
+ * could not be recorded at all.
+ *
+ * What it names is the model the adapter asked for. The completion chunk still
+ * reports the model that actually answered, which can differ; a stopped turn
+ * only ever established the former.
+ */
+export interface StartedChunk {
+  readonly kind: 'started';
+  readonly modelId: ModelId;
+  readonly provider: string;
+}
+
 /** A run of answer text as it arrives. */
 export interface TextChunk {
   readonly kind: 'text';
@@ -29,7 +47,7 @@ export interface CompletionChunk {
   readonly provider: string;
 }
 
-export type GenerationChunk = TextChunk | CompletionChunk;
+export type GenerationChunk = StartedChunk | TextChunk | CompletionChunk;
 
 /**
  * Streaming text generation (ADR-012).
@@ -37,6 +55,9 @@ export type GenerationChunk = TextChunk | CompletionChunk;
  * Returns an AsyncIterable. Cancellation is expressed by stopping iteration —
  * `break` out of the `for await`, and the adapter aborts the underlying stream
  * in its `finally` block. No AbortSignal enters the domain.
+ *
+ * A successful stream is one started chunk, then zero or more text chunks, then
+ * exactly one completion chunk. A cancelled one is a prefix of that.
  *
  * Every provider failure surfaces as ProviderUnavailable. No provider type
  * crosses this boundary.

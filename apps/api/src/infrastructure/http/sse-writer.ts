@@ -30,7 +30,7 @@ export class SseWriter {
   }
 
   send(event: SseEvent): void {
-    if (this.closed) {
+    if (this.closed || this.gone()) {
       return;
     }
     this.response.write(
@@ -44,7 +44,21 @@ export class SseWriter {
       return;
     }
     this.closed = true;
+    if (this.gone()) {
+      return;
+    }
     this.response.end();
+  }
+
+  /**
+   * True once the client has dropped the connection.
+   *
+   * Writing to a socket that is already gone throws ERR_STREAM_DESTROYED, which
+   * would turn an ordinary cancellation — the user tapping Stop — into an error
+   * path. There is nobody left to write to, so there is nothing to report.
+   */
+  private gone(): boolean {
+    return this.response.destroyed || this.response.writableEnded;
   }
 
   private flush(): void {

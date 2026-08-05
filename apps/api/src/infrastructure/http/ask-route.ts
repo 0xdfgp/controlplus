@@ -69,13 +69,42 @@ export function registerAskRoute(
     let inputTokens: number | null = null;
     let outputTokens: number | null = null;
     let thoughtTokens: number | null = null;
+    let terminalState: 'completed' | 'stopped' | null = null;
     let errorClass: string | null = null;
+
+    // The user tapping Stop is the client aborting the request (ADR-016), so
+    // the connection going away is the whole signal.
+    //
+    // It has to be the response that is watched, not the request. Since Node 16
+    // an IncomingMessage emits 'close' once its body has been read, which for a
+    // one-line JSON POST is immediately — watching that reports every single
+    // turn as stopped. A ServerResponse emits 'close' either when the response
+    // finished or when the connection died first, and `writableEnded` is what
+    // separates the two.
+    let clientGone = false;
+    reply.raw.on('close', () => {
+      clientGone = !reply.raw.writableEnded;
+    });
 
     try {
       for await (const event of dependencies.askQuestion.execute({
         conversationId,
         question,
       })) {
+        if (clientGone) {
+          // Cancellation is stopping iteration (ADR-012). Breaking makes the
+          // loop call return() on the use case, which releases the provider
+          // stream and writes the partial answer as stopped.
+          //
+          // The flag is checked between events rather than raced against the
+          // next one because an async generator queues return() behind an
+          // in-flight next() either way: neither shape can interrupt a provider
+          // that is mid-silence. Stop only exists in the responding state,
+          // where deltas are arriving, so in practice this lands at once.
+          terminalState = 'stopped';
+          break;
+        }
+
         if (event.kind === 'delta') {
           if (!responding) {
             responding = true;
@@ -87,6 +116,7 @@ export function registerAskRoute(
 
         if (event.kind === 'completed') {
           const { message } = event;
+          terminalState = message.state ?? 'completed';
           inputTokens = message.usage?.inputTokens.value ?? null;
           outputTokens = message.usage?.outputTokens.value ?? null;
           thoughtTokens = message.usage?.thoughtTokens.value ?? null;
@@ -126,6 +156,7 @@ export function registerAskRoute(
         inputTokens,
         outputTokens,
         thoughtTokens,
+        terminalState,
         errorClass,
       });
     }

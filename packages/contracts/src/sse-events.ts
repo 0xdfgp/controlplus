@@ -7,6 +7,10 @@
  * Sequence on the failure path:
  *   stage(thinking) -> error
  *
+ * A stopped turn has no closing event. The client aborted the request, so the
+ * stream ends where it ends: there is nobody left to tell. The stopped state is
+ * recorded server side, on the Message and in the turn log.
+ *
  * There are no transcript events. Transcription happens on the device
  * (ADR-018), so audio never reaches this stream.
  */
@@ -16,8 +20,8 @@ export type Stage = 'thinking' | 'responding';
 
 /**
  * How a turn ended. A Message is written once, already in one of these states
- * (ADR-013). Only 'completed' is emitted in this slice; 'stopped' arrives with
- * cancellation in S2.
+ * (ADR-013). Only 'completed' is ever carried on the wire: a stopped turn has
+ * no live connection left to carry anything.
  */
 export type TerminalState = 'completed' | 'stopped';
 

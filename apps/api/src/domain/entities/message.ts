@@ -9,8 +9,8 @@ export type MessageAuthor = 'user' | 'assistant';
 
 /**
  * How a turn ended. A Message is written once, already in one of these states
- * (ADR-013). Only 'completed' is produced in this slice; 'stopped' arrives with
- * cancellation in S2.
+ * (ADR-013). 'stopped' is a turn the user or a lost connection ended early: the
+ * partial answer is kept, and it is not a failure.
  */
 export type TerminalState = 'completed' | 'stopped';
 

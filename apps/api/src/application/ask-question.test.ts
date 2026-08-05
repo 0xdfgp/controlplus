@@ -142,6 +142,85 @@ describe('AskQuestion, happy path', () => {
   });
 });
 
+describe('AskQuestion, when the caller stops consuming the turn', () => {
+  const port = () =>
+    new ScriptedTextGeneration([
+      { kind: 'text', text: 'That message has ' },
+      { kind: 'text', text: 'two signs of a scam.' },
+      completionChunk(),
+    ]);
+
+  /** What the route does when the client disconnects: take some, then leave. */
+  async function askAndWalkAway(
+    stream: AsyncIterable<AskQuestionEvent>,
+  ): Promise<void> {
+    for await (const event of stream) {
+      if (event.kind === 'delta') {
+        break;
+      }
+    }
+  }
+
+  it('writes the partial answer once, marked as stopped', async () => {
+    const { useCase, messages } = build(port());
+
+    await askAndWalkAway(
+      useCase.execute({ conversationId, question: 'Is this a scam?' }),
+    );
+
+    expect(messages.assistantMessages()).toHaveLength(1);
+    const assistant = messages.assistantMessages()[0];
+    expect(assistant?.state).toBe('stopped');
+    expect(assistant?.text()).toBe('That message has ');
+  });
+
+  it('attributes the stopped message and gives it usage', async () => {
+    const { useCase, messages } = build(port());
+
+    await askAndWalkAway(
+      useCase.execute({ conversationId, question: 'Is this a scam?' }),
+    );
+
+    const assistant = messages.assistantMessages()[0];
+    expect(assistant?.provenance?.origin).toBe('ai-generated');
+    expect(assistant?.provenance?.modelId.value).toBe('gemini-3.5-flash');
+    expect(assistant?.usage?.totalTokens().value).toBe(0);
+  });
+
+  it('keeps the user message: they did ask', async () => {
+    const { useCase, messages } = build(port());
+
+    await askAndWalkAway(
+      useCase.execute({ conversationId, question: 'Is this a scam?' }),
+    );
+
+    expect(messages.userMessages()).toHaveLength(1);
+  });
+
+  it('stops iterating the port, which is what releases the provider stream', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+
+    await askAndWalkAway(
+      useCase.execute({ conversationId, question: 'Is this a scam?' }),
+    );
+
+    expect(scripted.released).toBe(true);
+  });
+
+  it('writes one row, not two, when the turn completed before the caller left', async () => {
+    const { useCase, messages } = build(port());
+
+    const stream = useCase.execute({ conversationId, question: 'q' });
+    await collect(stream);
+    // Closing an already finished turn must not produce a second, stopped row.
+    await stream.return(undefined);
+
+    expect(messages.assistantMessages()).toHaveLength(1);
+    expect(messages.assistantMessages()[0]?.state).toBe('completed');
+  });
+});
+
 describe('AskQuestion, when the generation port throws', () => {
   const failing = () =>
     new FailingTextGeneration(new ProviderUnavailable('google'), [

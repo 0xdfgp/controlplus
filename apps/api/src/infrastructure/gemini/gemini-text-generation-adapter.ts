@@ -46,6 +46,19 @@ export class GeminiTextGenerationAdapter implements TextGenerationPort {
 
     const iterator = stream.events();
     try {
+      // Named before the provider has said anything, so a turn stopped in the
+      // first second is still attributable. Waiting for interaction.created
+      // would read better but it lands around 280ms in, and a turn stopped
+      // before that could not be recorded at all.
+      //
+      // Inside the try, because a consumer that stops here must still release
+      // the provider stream.
+      yield {
+        kind: 'started',
+        modelId: this.defaultModelId,
+        provider: GEMINI_PROVIDER,
+      };
+
       while (true) {
         const step = await iterator.next();
         if (step.done === true) {

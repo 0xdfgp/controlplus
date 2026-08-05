@@ -2,18 +2,19 @@ import { useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { RespondingState } from './responding-state.tsx';
+import { AnswerView } from './answer-view.tsx';
+import { QuestionInput } from './question-input.tsx';
+import { StopButton } from './stop-button.tsx';
 import { SupportFooter } from './support-footer.tsx';
 import { theme } from './theme.ts';
 import { ThinkingIndicator } from './thinking-indicator.tsx';
+import { isInFlight } from './turn-machine.ts';
 import { useTurn } from './use-turn.ts';
 
 export interface AskScreenProps {
@@ -22,11 +23,23 @@ export interface AskScreenProps {
 }
 
 /**
- * The one screen. Three states: idle, thinking, responding.
+ * The one screen. It reads the turn state machine and holds no state of its own
+ * beyond the text being typed (ADR-022).
  *
- * Deliberately absent, because the brief puts them in later slices: the Stop
- * button (S2), "Add a photo" (S4), "Speak instead" (S5) and the AI disclosure
- * chip (S6). They appear in the design mockups; they are not built here.
+ * Four shapes, from five states:
+ *
+ *   idle, nothing asked yet  the question, and nothing else
+ *   thinking                 the waiting indicator, alone
+ *   responding               the answer as it builds, and Stop
+ *   idle / stopped / failed  the answer, and the input ready below it
+ *
+ * That last row is the implicit return: a finished turn leaves its answer where
+ * it is and puts the way to ask again underneath. No "ask another question"
+ * control, because the input already is one.
+ *
+ * Deliberately absent, because the brief puts them in later slices: "Add a
+ * photo" (S4), "Speak instead" (S5) and the AI disclosure chip (S6). E7 draws
+ * them; they are not built here.
  */
 export function AskScreen({
   baseUrl,
@@ -40,6 +53,9 @@ export function AskScreen({
     setDraft('');
   };
 
+  const hasAnswered = turn.question.length > 0;
+  const canAsk = !isInFlight(turn.state);
+
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
@@ -47,22 +63,42 @@ export function AskScreen({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.body}>
-          {turn.state === 'idle' ? (
-            <IdleState
-              draft={draft}
-              onChange={setDraft}
-              onSend={send}
-            />
-          ) : null}
-
           {turn.state === 'thinking' ? <ThinkingIndicator /> : null}
 
-          {turn.state === 'responding' ? (
-            <RespondingState
+          {canAsk && !hasAnswered ? (
+            <View style={styles.first}>
+              <Text style={styles.heading}>What would you like help with?</Text>
+              <QuestionInput
+                draft={draft}
+                placeholder="Type your question here"
+                onChange={setDraft}
+                onSend={send}
+              />
+            </View>
+          ) : null}
+
+          {hasAnswered && turn.state !== 'thinking' ? (
+            <AnswerView
+              state={turn.state}
               question={turn.question}
               answer={turn.answer}
               errorMessage={turn.errorMessage}
             />
+          ) : null}
+
+          {turn.state === 'responding' ? (
+            <StopButton onPress={turn.stop} />
+          ) : null}
+
+          {canAsk && hasAnswered ? (
+            <View style={styles.followUp}>
+              <QuestionInput
+                draft={draft}
+                placeholder="Ask another question"
+                onChange={setDraft}
+                onSend={send}
+              />
+            </View>
           ) : null}
         </View>
 
@@ -72,81 +108,20 @@ export function AskScreen({
   );
 }
 
-function IdleState({
-  draft,
-  onChange,
-  onSend,
-}: {
-  draft: string;
-  onChange: (value: string) => void;
-  onSend: () => void;
-}): React.JSX.Element {
-  const canSend = draft.trim().length > 0;
-
-  return (
-    <View style={styles.idle}>
-      <Text style={styles.heading}>What would you like help with?</Text>
-
-      <TextInput
-        style={styles.input}
-        value={draft}
-        onChangeText={onChange}
-        placeholder="Type your question here"
-        placeholderTextColor={theme.colors.muted}
-        accessibilityLabel="Your question"
-        multiline
-        returnKeyType="send"
-        onSubmitEditing={onSend}
-      />
-
-      <Pressable
-        style={({ pressed }) => [
-          styles.sendButton,
-          !canSend && styles.sendButtonDisabled,
-          pressed && canSend && styles.sendButtonPressed,
-        ]}
-        onPress={onSend}
-        disabled={!canSend}
-        accessibilityRole="button"
-        accessibilityLabel="Send your question"
-        accessibilityState={{ disabled: !canSend }}
-      >
-        <Text style={styles.sendLabel}>Send</Text>
-      </Pressable>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.colors.background },
   body: { flex: 1, paddingHorizontal: theme.spacing(3) },
-  idle: { flex: 1, justifyContent: 'center' },
+  first: { flex: 1, justifyContent: 'center' },
   heading: {
     fontSize: theme.headingFontSize,
     fontWeight: '700',
     color: theme.colors.text,
     marginBottom: theme.spacing(3),
   },
-  input: {
-    minHeight: theme.minimumTouchTarget,
-    backgroundColor: theme.colors.surface,
-    borderColor: theme.colors.border,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: theme.spacing(2),
-    paddingVertical: theme.spacing(2),
-    fontSize: theme.bodyFontSize,
-    color: theme.colors.text,
+  // The divider E7 draws: the answer above, the way to ask again below.
+  followUp: {
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+    paddingTop: theme.spacing(2),
   },
-  sendButton: {
-    marginTop: theme.spacing(2),
-    minHeight: theme.minimumTouchTarget,
-    borderRadius: 14,
-    backgroundColor: theme.colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sendButtonDisabled: { opacity: 0.45 },
-  sendButtonPressed: { opacity: 0.8 },
-  sendLabel: { fontSize: 22, fontWeight: '700', color: '#FFFFFF' },
 });

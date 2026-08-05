@@ -9,6 +9,13 @@ export interface TurnLogFields {
   readonly outputTokens: number | null;
   /** Billed outside input and output (ADR-020), so logged separately. */
   readonly thoughtTokens: number | null;
+  /**
+   * How the turn ended, or null if it failed and has no terminal state.
+   *
+   * 'stopped' is the operator's evidence that the client left and the provider
+   * stream was released rather than left running to be billed for.
+   */
+  readonly terminalState: 'completed' | 'stopped' | null;
   readonly errorClass: string | null;
 }
 
@@ -48,6 +55,7 @@ export class TurnLogger {
         inputTokens: fields.inputTokens,
         outputTokens: fields.outputTokens,
         thoughtTokens: fields.thoughtTokens,
+        terminalState: fields.terminalState,
         errorClass: fields.errorClass,
         question: redact(fields.question),
       }),

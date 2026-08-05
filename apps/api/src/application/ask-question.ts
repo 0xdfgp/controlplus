@@ -7,7 +7,10 @@ import type { Clock } from '../domain/ports/clock.ts';
 import type { ConversationRepository } from '../domain/ports/conversation-repository.ts';
 import type { IdGenerator } from '../domain/ports/id-generator.ts';
 import type { MessageRepository } from '../domain/ports/message-repository.ts';
-import type { AnswerGeneration } from '../domain/services/answer-generation.ts';
+import type {
+  AnswerGeneration,
+  AnswerGenerationEvent,
+} from '../domain/services/answer-generation.ts';
 import type { ConversationId } from '../domain/value-objects/conversation-id.ts';
 
 export interface AskQuestionInput {
@@ -73,11 +76,21 @@ export class AskQuestion {
       }),
     );
 
+    // Driven by hand rather than with `for await`, and this is the reason: when
+    // the caller walks away mid-turn, AnswerGeneration hands back the partial
+    // answer as a stopped Message on the way out. `for await` calls `return()`
+    // on our behalf and discards whatever comes back, which would silently drop
+    // that write.
+    const generation = this.answerGeneration.run(conversation, input.question);
+
     try {
-      for await (const event of this.answerGeneration.run(
-        conversation,
-        input.question,
-      )) {
+      while (true) {
+        const step = await generation.next();
+        if (step.done === true) {
+          return;
+        }
+        const event = step.value;
+
         if (event.kind === 'delta') {
           yield { kind: 'delta', text: event.text };
           continue;
@@ -97,6 +110,24 @@ export class AskQuestion {
         error,
         event: GenerationFailed.from(conversation.id, error, this.clock.now()),
       };
+    } finally {
+      await this.writeStoppedTurn(generation);
+    }
+  }
+
+  /**
+   * Closes the generation and writes the partial answer, if there is one.
+   *
+   * On a turn that ran to completion or failed, the generator is already
+   * finished and `return()` resolves done with nothing to write, so this cannot
+   * double-write the completed path.
+   */
+  private async writeStoppedTurn(
+    generation: AsyncGenerator<AnswerGenerationEvent, void, undefined>,
+  ): Promise<void> {
+    const closing = await generation.return(undefined);
+    if (closing.done === false && closing.value.kind === 'completed') {
+      await this.messages.save(closing.value.message);
     }
   }
 

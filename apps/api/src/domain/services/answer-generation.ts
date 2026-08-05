@@ -2,6 +2,7 @@ import type { ContentPart } from '../content/content-part.ts';
 import { TextPart } from '../content/text-part.ts';
 import type { Conversation } from '../entities/conversation.ts';
 import { Message } from '../entities/message.ts';
+import type { TerminalState } from '../entities/message.ts';
 import { ProviderUnavailable } from '../errors/provider-unavailable.ts';
 import { MessageCompleted } from '../events/message-completed.ts';
 import type { ProductPolicy } from '../policy/product-policy.ts';
@@ -12,6 +13,7 @@ import type {
   TextGenerationPort,
 } from '../ports/text-generation-port.ts';
 import { Provenance } from '../value-objects/provenance.ts';
+import { Usage } from '../value-objects/usage.ts';
 
 /** Answer text as it arrives, one run at a time. */
 export interface AnswerDelta {
@@ -19,7 +21,12 @@ export interface AnswerDelta {
   readonly text: string;
 }
 
-/** The turn closed. The Message is complete and not yet persisted. */
+/**
+ * The turn closed. The Message is complete and not yet persisted.
+ *
+ * One event for both terminal states: the Message says which it is. ADR-015
+ * rejected a separate MessageStopped for the same reason.
+ */
 export interface AnswerCompleted {
   readonly kind: 'completed';
   readonly message: Message;
@@ -32,14 +39,14 @@ export type AnswerGenerationEvent = AnswerDelta | AnswerCompleted;
  * Drives one turn of generation.
  *
  * Assembles the request from the product policy and the question, drives the
- * stream, and builds the completed Message with the provenance and usage the
- * provider reported on the completion chunk.
+ * stream, and builds the Message with the provenance and usage the provider
+ * reported.
  *
  * It does not persist. The use case decides when and whether to write.
  *
- * Cancellation is not built in this slice (S2), but the shape already supports
- * it: a caller that stops iterating stops the port's iteration too, and the
- * adapter aborts the provider stream in its `finally`.
+ * Cancellation is expressed by the consumer stopping iteration (ADR-012). That
+ * unwinds this generator, which releases the port's stream and then hands back
+ * the partial answer as a stopped Message — see the `finally` below.
  */
 export class AnswerGeneration {
   constructor(
@@ -53,58 +60,105 @@ export class AnswerGeneration {
     conversation: Conversation,
     question: string,
   ): AsyncGenerator<AnswerGenerationEvent, void, undefined> {
-    const stream = this.textGeneration.generate({
-      policy: this.policy,
-      question,
-    });
-
     let answer = '';
-    let completion: CompletionChunk | null = null;
+    let provenance: Provenance | null = null;
+    let closed = false;
+    let failed = false;
 
-    for await (const chunk of stream) {
-      if (chunk.kind === 'text') {
-        answer += chunk.text;
-        yield { kind: 'delta', text: chunk.text };
-        continue;
+    try {
+      let completion: CompletionChunk | null = null;
+
+      for await (const chunk of this.textGeneration.generate({
+        policy: this.policy,
+        question,
+      })) {
+        if (chunk.kind === 'started') {
+          provenance = Provenance.aiGenerated(chunk.modelId, chunk.provider);
+          continue;
+        }
+        if (chunk.kind === 'text') {
+          answer += chunk.text;
+          yield { kind: 'delta', text: chunk.text };
+          continue;
+        }
+        completion = chunk;
       }
-      completion = chunk;
-    }
 
-    if (completion === null) {
-      // The port's contract is that a successful generation ends with a
-      // completion chunk. A stream that just stops has not produced an answer
-      // we can record usage or provenance for.
-      throw new ProviderUnavailable('text generation');
-    }
+      if (completion === null) {
+        // The port's contract is that a successful generation ends with a
+        // completion chunk. A stream that just stops has not produced an answer
+        // we can record usage or provenance for.
+        throw new ProviderUnavailable('text generation');
+      }
 
-    const message = this.buildMessage(conversation, answer, completion);
-    yield {
-      kind: 'completed',
-      message,
-      event: MessageCompleted.from(message, message.createdAt),
-    };
+      closed = true;
+      yield this.close(
+        conversation,
+        answer,
+        Provenance.aiGenerated(completion.modelId, completion.provider),
+        completion.usage,
+        'completed',
+      );
+    } catch (error) {
+      // A turn that failed is not a turn that was stopped. It writes no
+      // assistant message at all, so the `finally` below must know the
+      // difference between unwinding from a throw and unwinding from a
+      // consumer that walked away.
+      failed = true;
+      throw error;
+    } finally {
+      // No provenance means the stream was abandoned before the port named a
+      // provider, which leaves nothing to attribute a Message to. Nothing is
+      // written, and nothing was generated either.
+      if (!closed && !failed && provenance !== null) {
+        // Reached when the consumer stopped iterating: the turn is over and
+        // whatever text arrived is the answer, marked as stopped.
+        //
+        // Yielding here is what hands that Message back. A generator resumed by
+        // `return()` runs its `finally`, and a `yield` inside it becomes the
+        // result of that `return()` call. The use case reads it there. A plain
+        // `for await` would discard it, which is why the use case does not use
+        // one.
+        yield this.close(
+          conversation,
+          answer,
+          provenance,
+          // Gemini reports usage only on interaction.completed, which a stopped
+          // turn never reaches. Zero is what the provider reported. It is not
+          // an estimate of what the turn cost, and the write up should not read
+          // it as one.
+          Usage.fromCounts(0, 0, 0),
+          'stopped',
+        );
+      }
+    }
   }
 
-  private buildMessage(
+  private close(
     conversation: Conversation,
     answer: string,
-    completion: CompletionChunk,
-  ): Message {
+    provenance: Provenance,
+    usage: Usage,
+    state: TerminalState,
+  ): AnswerCompleted {
     const parts: ContentPart[] = answer.length > 0 ? [TextPart.of(answer)] : [];
 
-    return Message.fromAssistant({
+    const message = Message.fromAssistant({
       id: this.idGenerator.nextMessageId(),
       conversationId: conversation.id,
       parts,
       createdAt: this.clock.now(),
       // Provenance is built here, in the domain, from what the provider
       // actually reported. The HTTP layer never supplies it.
-      provenance: Provenance.aiGenerated(
-        completion.modelId,
-        completion.provider,
-      ),
-      usage: completion.usage,
-      state: 'completed',
+      provenance,
+      usage,
+      state,
     });
+
+    return {
+      kind: 'completed',
+      message,
+      event: MessageCompleted.from(message, message.createdAt),
+    };
   }
 }

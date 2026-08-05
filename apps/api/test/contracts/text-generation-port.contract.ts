@@ -52,6 +52,26 @@ export function describeTextGenerationPortContract(
   scenarios: TextGenerationPortScenarios,
 ): void {
   describe(`TextGenerationPort contract: ${adapterName}`, () => {
+    it('opens with exactly one started chunk, before any answer text', async () => {
+      const chunks = await collect(scenarios.happyPath());
+
+      const kinds = chunks.map((c) => c.kind);
+      expect(kinds.filter((k) => k === 'started')).toHaveLength(1);
+      expect(kinds[0]).toBe('started');
+    });
+
+    it('names the model and provider on the started chunk', async () => {
+      const chunks = await collect(scenarios.happyPath());
+      const started = chunks[0];
+      if (started?.kind !== 'started') {
+        throw new Error('expected a started chunk first');
+      }
+
+      // What makes a turn stopped before completion attributable at all.
+      expect(started.modelId.value.length).toBeGreaterThan(0);
+      expect(started.provider.length).toBeGreaterThan(0);
+    });
+
     it('streams text chunks and ends with exactly one completion chunk', async () => {
       const chunks = await collect(scenarios.happyPath());
 
@@ -168,7 +188,7 @@ export function describeTextGenerationPortContract(
       const chunks = await collect(scenarios.happyPath());
 
       for (const chunk of chunks) {
-        expect(['text', 'completion']).toContain(chunk.kind);
+        expect(['started', 'text', 'completion']).toContain(chunk.kind);
         expect(Object.keys(chunk).sort()).not.toContain('event_type');
       }
     });
@@ -183,14 +203,36 @@ export function describeTextGenerationPortContract(
     it('releases the provider stream when the consumer stops early', async () => {
       scenarios.reset();
       const port = scenarios.happyPath();
+      const seen: GenerationChunk['kind'][] = [];
 
       for await (const chunk of port.generate({
         policy: ProductPolicy.current(),
         question: 'Is this a scam?',
       })) {
+        seen.push(chunk.kind);
         if (chunk.kind === 'text') {
           break; // Cancellation is stopping iteration. No AbortSignal involved.
         }
+      }
+
+      expect(scenarios.wasAborted()).toBe(true);
+      // The turn was attributable at the moment it was abandoned. Without this
+      // the partial answer could not be recorded, because a Message cannot be
+      // built without provenance.
+      expect(seen[0]).toBe('started');
+    });
+
+    it('releases the provider stream when the consumer stops before any text', async () => {
+      scenarios.reset();
+      const port = scenarios.happyPath();
+
+      // The app backgrounded during the thinking silence: the client is gone
+      // before a single word arrived, and the provider must not keep billing.
+      for await (const _chunk of port.generate({
+        policy: ProductPolicy.current(),
+        question: 'Is this a scam?',
+      })) {
+        break;
       }
 
       expect(scenarios.wasAborted()).toBe(true);
