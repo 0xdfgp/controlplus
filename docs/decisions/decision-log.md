@@ -916,8 +916,8 @@ opens by naming the OMC file, stating that both are active and that this
 one wins on product and closed decisions.
 
 The guard rails are declared immutable in that file: .claude/settings.json,
-.claude/rules/**, .dependency-cruiser.js and the ESLint config are never
-edited by an implementation session.
+.claude/hooks/**, .claude/rules/**, .dependency-cruiser.js and the ESLint
+config are never edited by an implementation session.
 
 Accepted honestly: that is a statement, not a sensor, and this project's
 own rule says a statement only lowers the probability. The sensors that
@@ -945,6 +945,11 @@ risk flagged for the Gemini Interactions API; it separates authoring from
 review with no self-approval in the same context; and its commit trailers
 leave a decision trail. That trail records what the agent rejected, not
 what I rejected, and the two must not be mixed in the submission.
+
+The first version of this list omitted .claude/hooks/**, which is where the
+hooks actually live, so the statement had a hole exactly where the
+protection mattered. Found when S1 reported changes to two files that were
+not on the list I asked it to check.
 
 Revisit when
 The first session shows the guard rail files modified, which would mean the

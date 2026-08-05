@@ -15,7 +15,7 @@ Conversational AI assistant inside a React Native app for US adults aged
   implementation session. If a closed decision looks wrong, stop and say so.
 - Build only what the current slice brief authorises. Its Out of scope
   section is binding. Never build ahead.
-- Never modify .claude/settings.json, .claude/rules/**,
+- Never modify .claude/settings.json, .claude/hooks/**, .claude/rules/**,
   .dependency-cruiser.js or the ESLint config. They are the guard rails.
 - No autopilot, ralph or ultrawork on this project. One brief, one session.
 - Report deviations from the brief instead of resolving them silently.
