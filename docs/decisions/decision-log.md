@@ -1662,7 +1662,50 @@ The assistant proposed keeping all message content out of application logs, fram
 
 The assistant filed machine-readable marking of generated output as a backlog item and recorded the constraint as coming from my instructions when it had come from its own reading of the regulation. It had also collapsed two distinct obligations into one: disclosing that the user is talking to an AI, and marking the generated content itself. Different provisions, different mechanisms. Produced ADR-006.
 
-**The pattern worth naming.** Three of these five are the same failure. Under a tight timebox the assistant reached for whichever option sounded most prudent, without checking whether the saving was real. In each case the cut cost more than it saved: an unobservable system, a prototype that forgets everything on restart, and a deferral of work that takes under an hour. The architect's job here was not to catch mistakes of fact but to test whether each proposed economy actually economised. That is now rule 8 in the architect assistant's instructions, and the boundary lint rule in `02-architecture-principles.md` exists for the same reason: an agent under time pressure needs constraints it cannot argue with.
+**The pattern worth naming.** Three of the first five are the same failure. Under a tight timebox the assistant reached for whichever option sounded most prudent, without checking whether the saving was real. In each case the cut cost more than it saved: an unobservable system, a prototype that forgets everything on restart, and a deferral of work that takes under an hour. The architect's job here was not to catch mistakes of fact but to test whether each proposed economy actually economised. That is now rule 8 in the architect assistant's instructions, and the boundary lint rule in `02-architecture-principles.md` exists for the same reason: an agent under time pressure needs constraints it cannot argue with.
+
+The last two are a different kind, and they took longer to spot. Neither stated anything false. One offered a live option against a weak one, so a correct choice inside that set of options would still have been the wrong choice. The other treated a constraint we had already written down as though it were still open, because the constraint lived in a document rather than in the decision being worked on. Both are harder to catch than a wrong fact, since there is nothing to check against. What caught them was asking what had been left out, and re-reading our own documents before accepting a question as open.
+
+**6. A biased choice: the real alternative was left out of the frame.**
+
+Asked to settle the persistence engine and migration tooling, the assistant
+proposed Postgres with Kysely and named Prisma as the alternative. Prisma
+loses on a single argument, that its generated model tends to become the
+model, which is the one thing this architecture will not accept. Drizzle was
+not mentioned. It sits in the same category as Kysely on the point that
+mattered, returns plain rows, carries no decorators, and additionally
+generates migrations from a declared schema, which is worth twenty to thirty
+minutes across twelve slices. Caught by asking why Kysely and not Drizzle.
+Produced ADR-010, which selects Drizzle.
+
+This is a different failure from the five above and worth separating. The
+assistant did not state anything false, and the option it recommended was
+defensible. What it got wrong was the frame: it offered a live candidate
+against a straw man, so a correct decision inside that frame would still have
+been the wrong decision. Its own operating instructions require two live
+candidates for exactly this reason. A wrong claim is visible; a missing
+option is not, and the only defence is to ask what was left out before
+choosing between what was offered.
+
+**7. Native audio input proposed without pricing the token cost or reading
+the UX rules already written.**
+
+The assistant framed the voice path as an open question between a dedicated
+speech-to-text step and a model that takes audio natively, treating both as
+live candidates. It had not priced the difference: audio bills roughly an
+order of magnitude more input tokens than the equivalent transcript, and
+because attachments stay in conversation context, every follow up pays that
+cost again, on a product whose fourth MLP criterion is that follow ups work.
+It had also not applied a constraint already written in
+03-senior-ux-principles.md, which requires the transcript to be shown before
+or alongside the answer so a mis-transcription is visible and correctable.
+That rule already forces a text transcript to exist, so native audio could
+only mean dropping the transcript and breaking the rule, or transcribing
+anyway and paying for both. Produced ADR-011.
+
+The failure here is not a wrong fact. It is that a settled constraint was
+treated as an open decision, because the constraint lived in a document the
+assistant had read rather than in the decision it was working on.
 
 ### Problems found by tests or manual verification
 
