@@ -1202,6 +1202,16 @@ answer is object storage behind an attachment port, and the write up says so.
 03-senior-ux-principles.md required on-device downscaling anyway, because
 uncropped screenshots are large and the connection is slow.
 
+Measured in S4: base64 inflates by a third, so a 5MB photo produces a 6.6MB
+body and the 6MB request cap in ADR-029 rejects it with a 413 before
+AttachmentTooLarge can fire. The domain error is the rule and the backstop,
+not the path that executes. What the user actually sees comes from a size
+check on the device before upload, which is better anyway: the plain sentence
+arrives without spending a slow upload first. The two numbers are left
+disagreeing deliberately rather than tuned to meet, because the device check
+is the real protection and the server limit is the one that must not be
+trusted to a client.
+
 Revisit when
 Conversations need to be reconstructable, or image-heavy follow ups make the
 re-send cost visible.
@@ -1535,6 +1545,68 @@ than worked around.
 Revisit when
 A working Gemini or OpenAI key arrives, at which point the second adapter is
 written and the comparison runs as originally planned.
+
+### ADR-033: Two-layer evaluation, deterministic gates then a cross-family binary judge
+Date: 2026-08-05
+Status: accepted
+
+Context
+D18 requires comparing providers on response quality and clarity for a senior
+user. Those are the two criteria a stopwatch cannot measure, and manual
+reading does not scale: the prompt will change and the comparison has to be
+re-runnable. Reviewed current practice in August 2026, which converges on
+binary rubric items judged one at a time with a justification and combined by
+conjunction, a judge from a different model family than the generator to avoid
+self-preference, structured output to mitigate verbosity and position bias,
+and calibration against a small set of human labels.
+
+Decision
+Two layers.
+
+Layer one, deterministic checks in code, no model involved. Markdown headings,
+bold or horizontal rules present. The words simply, just or obviously. Whether
+procedural steps are numbered. Whether the answer is truncated mid-sentence. A
+failure here fails the case without invoking a judge.
+
+Layer two, an LLM judge with four binary rubric items, each returning pass or
+fail plus the sentence that justifies it, in a structured JSON schema:
+- Does the answer say what would make this a scam before asserting it is
+  normal?
+- Is every technical term explained in the same line it appears?
+- Does it admit uncertainty where the model cannot know?
+- Does the tone treat the user as capable, without condescension?
+
+A response passes only if all four pass. No numeric scale: a score out of ten
+would carry a precision this measurement does not have.
+
+The judge is from a different family than the model under test. Where that is
+impractical, one judge is used and its own family is excluded from any ranking
+claim, stated in the write up.
+
+Calibration: ten responses are labelled pass or fail by hand and compared with
+the judge. The agreement rate is reported alongside the results, so the
+comparison rests on a measured judge rather than an assumed one.
+
+Consequences
+The rubric runs as tests, so a prompt change re-runs it rather than requiring
+another manual read. That is what makes the product policy safe to edit.
+
+The scam check item is the one that matters most. A probe already showed a
+model skipping it unprompted (ADR-021), which is why it is product policy at
+all, and this is the only automated check on whether the policy works rather
+than merely being present.
+
+Honest limits for the write up. Ten labels is a small calibration set and the
+agreement figure carries wide error. Judge and generator families overlap
+across the candidates, so cross-family judging is partial. And a judge
+measures conformity to a rubric written by me, not whether a 78-year-old was
+actually helped, which only user testing settles.
+
+Roughly 40 minutes for the harness plus the runs.
+
+Revisit when
+The judge disagrees with the human labels often enough to be untrustworthy, or
+a rubric item turns out to pass for every candidate and stops discriminating.
 
 
 ## Backlog (deliberately deferred)
