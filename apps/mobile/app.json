@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Control+",
+    "slug": "control-plus",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.controlplus.companion",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      },
+      "appleTeamId": "M3FA4LK7KY"
+    },
+    "android": {
+      "package": "com.controlplus.companion",
+      "usesCleartextTraffic": true
+    },
+    "plugins": [
+      "expo-dev-client"
+    ]
+  }
+}

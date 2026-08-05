@@ -1,0 +1,34 @@
+{
+  "name": "control-plus",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/contracts",
+    "apps/api",
+    "apps/mobile"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate": "npm run db:migrate --workspace @control-plus/api",
+    "api": "npm run dev --workspace @control-plus/api",
+    "mobile": "npm start --workspace @control-plus/mobile",
+    "lint": "eslint .",
+    "lint:boundaries": "node scripts/lint-boundaries.mjs apps/api/src",
+    "typecheck": "tsc -b apps/api packages/contracts && tsc -p apps/mobile --noEmit",
+    "test:unit": "vitest run",
+    "test": "npm run lint:boundaries && npm run lint && npm run typecheck && npm run test:unit"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "dependency-cruiser": "^18.1.1",
+    "eslint": "^10.8.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.66.0",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,269 @@
+import { afterAll, beforeAll, afterEach, describe, expect, it } from 'vitest';
+
+import {
+  deleteConversation,
+  openTestDatabase,
+} from '../../../test/support/test-database.ts';
+import { TextPart } from '../../domain/content/text-part.ts';
+import { Conversation } from '../../domain/entities/conversation.ts';
+import { Message } from '../../domain/entities/message.ts';
+import { ConversationId } from '../../domain/value-objects/conversation-id.ts';
+import { MessageId } from '../../domain/value-objects/message-id.ts';
+import { ModelId } from '../../domain/value-objects/model-id.ts';
+import { Provenance } from '../../domain/value-objects/provenance.ts';
+import { Usage } from '../../domain/value-objects/usage.ts';
+import type { Database } from './database.ts';
+import { DrizzleConversationRepository } from './drizzle-conversation-repository.ts';
+import { DrizzleMessageRepository } from './drizzle-message-repository.ts';
+
+let database: Database;
+let conversations: DrizzleConversationRepository;
+let messages: DrizzleMessageRepository;
+
+const createdAt = new Date('2026-08-05T10:00:00.000Z');
+let counter = 0;
+const createdConversations: string[] = [];
+
+function nextConversationId(): ConversationId {
+  counter += 1;
+  const id = ConversationId.fromString(`test-conv-${process.pid}-${counter}`);
+  createdConversations.push(id.value);
+  return id;
+}
+
+beforeAll(async () => {
+  database = await openTestDatabase();
+  conversations = new DrizzleConversationRepository(database.db);
+  messages = new DrizzleMessageRepository(database.db);
+});
+
+afterEach(async () => {
+  for (const id of createdConversations.splice(0)) {
+    await deleteConversation(database, id);
+  }
+});
+
+afterAll(async () => {
+  await database.close();
+});
+
+describe('DrizzleConversationRepository', () => {
+  it('round trips a conversation', async () => {
+    const id = nextConversationId();
+    await conversations.save(Conversation.start(id, createdAt));
+
+    const found = await conversations.findById(id);
+
+    expect(found?.id.value).toBe(id.value);
+    expect(found?.startedAt.toISOString()).toBe(createdAt.toISOString());
+  });
+
+  it('returns null for a conversation that does not exist', async () => {
+    const missing = ConversationId.fromString('test-conv-does-not-exist');
+
+    expect(await conversations.findById(missing)).toBeNull();
+  });
+});
+
+describe('DrizzleMessageRepository', () => {
+  it('round trips an assistant message through jsonb, invariants intact', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    const original = Message.fromAssistant({
+      id: MessageId.fromString(`test-msg-a-${counter}`),
+      conversationId,
+      parts: [TextPart.of('That message has two signs of a scam.')],
+      createdAt,
+      provenance: Provenance.aiGenerated(
+        ModelId.fromString('gemini-3.5-flash'),
+        'google',
+      ),
+      usage: Usage.fromCounts(118, 27, 254),
+      state: 'completed',
+    });
+
+    await messages.save(original);
+    const [restored] = await messages.findByConversation(conversationId);
+
+    expect(restored?.author).toBe('assistant');
+    expect(restored?.text()).toBe('That message has two signs of a scam.');
+    expect(restored?.provenance?.origin).toBe('ai-generated');
+    expect(restored?.provenance?.modelId.value).toBe('gemini-3.5-flash');
+    expect(restored?.provenance?.provider).toBe('google');
+    expect(restored?.usage?.inputTokens.value).toBe(118);
+    expect(restored?.usage?.outputTokens.value).toBe(27);
+    expect(restored?.usage?.thoughtTokens.value).toBe(254);
+    expect(restored?.usage?.totalTokens().value).toBe(399);
+    expect(restored?.state).toBe('completed');
+  });
+
+  it('stores all three token counts in the jsonb column', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    await messages.save(
+      Message.fromAssistant({
+        id: MessageId.fromString(`test-msg-usage-${counter}`),
+        conversationId,
+        parts: [TextPart.of('answer')],
+        createdAt,
+        provenance: Provenance.aiGenerated(
+          ModelId.fromString('gemini-3.5-flash'),
+          'google',
+        ),
+        usage: Usage.fromCounts(22, 20, 388),
+        state: 'completed',
+      }),
+    );
+
+    const row = await database.pool.query<{
+      usage: { inputTokens: number; outputTokens: number; thoughtTokens: number };
+    }>('SELECT usage FROM messages WHERE conversation_id = $1', [
+      conversationId.value,
+    ]);
+
+    expect(row.rows[0]?.usage).toEqual({
+      inputTokens: 22,
+      outputTokens: 20,
+      thoughtTokens: 388,
+    });
+  });
+
+  it('reads a row written before ADR-020 back with zero thinking tokens', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    // The exact shape S1 wrote: usage with two fields and no thoughtTokens.
+    await database.pool.query(
+      `INSERT INTO messages (id, conversation_id, author, parts, created_at, provenance, usage, state)
+       VALUES ($1, $2, 'assistant', $3::jsonb, now(), $4::jsonb, $5::jsonb, 'completed')`,
+      [
+        `test-msg-legacy-${counter}`,
+        conversationId.value,
+        JSON.stringify([{ kind: 'text', text: 'an answer from S1' }]),
+        JSON.stringify({
+          origin: 'ai-generated',
+          modelId: 'gemini-3.5-flash',
+          provider: 'google',
+        }),
+        JSON.stringify({ inputTokens: 180, outputTokens: 172 }),
+      ],
+    );
+
+    const [restored] = await messages.findByConversation(conversationId);
+
+    expect(restored?.usage?.thoughtTokens.value).toBe(0);
+    // Nothing else changed.
+    expect(restored?.usage?.inputTokens.value).toBe(180);
+    expect(restored?.usage?.outputTokens.value).toBe(172);
+    expect(restored?.text()).toBe('an answer from S1');
+    expect(restored?.provenance?.modelId.value).toBe('gemini-3.5-flash');
+    expect(restored?.state).toBe('completed');
+  });
+
+  it('round trips a user message with no provenance or usage', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    await messages.save(
+      Message.fromUser({
+        id: MessageId.fromString(`test-msg-u-${counter}`),
+        conversationId,
+        parts: [TextPart.of('Is this text about my bank a scam?')],
+        createdAt,
+      }),
+    );
+
+    const [restored] = await messages.findByConversation(conversationId);
+
+    expect(restored?.author).toBe('user');
+    expect(restored?.text()).toBe('Is this text about my bank a scam?');
+    expect(restored?.provenance).toBeNull();
+    expect(restored?.usage).toBeNull();
+    expect(restored?.state).toBeNull();
+  });
+
+  it('preserves several content parts in order', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    await messages.save(
+      Message.fromUser({
+        id: MessageId.fromString(`test-msg-p-${counter}`),
+        conversationId,
+        parts: [TextPart.of('first '), TextPart.of('second')],
+        createdAt,
+      }),
+    );
+
+    const [restored] = await messages.findByConversation(conversationId);
+
+    expect(restored?.parts).toHaveLength(2);
+    expect(restored?.text()).toBe('first second');
+  });
+
+  it('returns messages oldest first', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    await messages.save(
+      Message.fromUser({
+        id: MessageId.fromString(`test-msg-o1-${counter}`),
+        conversationId,
+        parts: [TextPart.of('question')],
+        createdAt,
+      }),
+    );
+    await messages.save(
+      Message.fromAssistant({
+        id: MessageId.fromString(`test-msg-o2-${counter}`),
+        conversationId,
+        parts: [TextPart.of('answer')],
+        createdAt: new Date(createdAt.getTime() + 1000),
+        provenance: Provenance.aiGenerated(
+          ModelId.fromString('gemini-3.5-flash'),
+          'google',
+        ),
+        usage: Usage.fromCounts(1, 2),
+        state: 'completed',
+      }),
+    );
+
+    const restored = await messages.findByConversation(conversationId);
+
+    expect(restored.map((m) => m.author)).toEqual(['user', 'assistant']);
+  });
+
+  it('refuses a second write of the same message id', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    const message = Message.fromUser({
+      id: MessageId.fromString(`test-msg-dup-${counter}`),
+      conversationId,
+      parts: [TextPart.of('written once')],
+      createdAt,
+    });
+
+    await messages.save(message);
+
+    // A Message is written once, when the turn closes. A second write is a bug
+    // in the caller, and the primary key says so rather than overwriting an
+    // answer somebody already read.
+    await expect(messages.save(message)).rejects.toThrow();
+  });
+
+  it('lets the database refuse an assistant row with no provenance', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    await expect(
+      database.pool.query(
+        `INSERT INTO messages (id, conversation_id, author, parts, created_at, provenance, usage, state)
+         VALUES ($1, $2, 'assistant', '[]'::jsonb, now(), NULL, NULL, 'completed')`,
+        [`test-msg-bad-${counter}`, conversationId.value],
+      ),
+    ).rejects.toThrow(/messages_assistant_is_attributed/);
+  });
+});

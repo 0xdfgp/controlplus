@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: controlplus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: controlplus
+      POSTGRES_PASSWORD: controlplus
+      POSTGRES_DB: controlplus
+    ports:
+      - "5433:5432"
+    volumes:
+      - controlplus-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U controlplus -d controlplus"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  controlplus-pgdata:

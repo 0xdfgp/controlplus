@@ -1,0 +1,23 @@
+{
+  "name": "@control-plus/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "db:migrate": "tsx src/infrastructure/persistence/migrate.ts"
+  },
+  "dependencies": {
+    "@control-plus/contracts": "*",
+    "@google/genai": "^2.15.0",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.11.2",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.6",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.20.6"
+  }
+}
