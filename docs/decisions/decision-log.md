@@ -767,7 +767,7 @@ which the current consensus moves to WebSocket.
 
 ### ADR-017: Gemini first, OpenAI second
 Date: 2026-08-05
-Status: accepted
+Status: superseded by ADR-032
 
 Context
 The S1 brief needs a TextGenerationPort adapter and no ADR named a
@@ -1475,6 +1475,55 @@ Revisit when
 Real traffic exists, at which point retention windows and access controls
 stop being optional, or free-prose detection becomes reliable enough to be
 worth its false positives.
+
+### ADR-032: Anthropic becomes the integrated provider, Sonnet by default
+Date: 2026-08-05
+Status: accepted. Supersedes ADR-017.
+
+Context
+ADR-017 chose Gemini first and OpenAI second. Neither is usable with the
+credentials the client provided. The Gemini credential is an OAuth token
+rather than an AI Studio API key, rejected with ACCESS_TOKEN_TYPE_UNSUPPORTED,
+and my own account ran out of quota during the build. The OpenAI key is valid
+but the organisation has no credit, so every generation call returns
+credit_balance_exhausted. The Anthropic key works.
+
+Decision
+Anthropic is the integrated provider, with claude-sonnet-4-5 on the default
+conversation path. Model selection for harder questions belongs to D18.
+
+Sonnet over Opus 5 on cost and latency. Measured on the same fixture
+question: Opus at effort low took 19.4s and 1,208 output tokens; Sonnet
+answered in 18.3s with the output limit reached at 700. Opus is priced
+substantially higher per token.
+
+Consequences
+Everything measured about reasoning tokens during this build is Gemini
+behaviour. ADR-020 and ADR-021 remain true as findings and stop describing
+the shipped system. Anthropic returns an empty thinking block rather than
+reasoning text, so the silence problem does not arise in the same form and
+there is no reasoning stream to drive a progress indicator from.
+
+Cost of choosing Sonnet, stated rather than hidden: on the same question
+Opus opened by distinguishing a genuine system warning from a scam and saying
+what a real warning never asks for, and Sonnet did not. That is the scam
+check ADR-021 moved into the product policy precisely because it must not
+depend on the model doing it unprompted. The policy test ADR-021 calls
+non-optional does not exist yet. It is now a prerequisite for this decision
+rather than outstanding work.
+
+Both models emit markdown headings and bold text. On a phone screen for
+someone of 80 that is noise, so the policy needs an explicit rule requiring
+plain text with numbered steps.
+
+The provider comparison now has one integrated provider and cannot be run
+across two until a second key works. That is stated in the submission rather
+than worked around.
+
+Revisit when
+A working Gemini or OpenAI key arrives, at which point the second adapter is
+written and the comparison runs as originally planned.
+
 
 ## Backlog (deliberately deferred)
 
