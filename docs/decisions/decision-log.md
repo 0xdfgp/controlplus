@@ -1157,6 +1157,11 @@ Attachments in history are references, not bytes (ADR-014), so images do not
 multiply the request as history grows. What that costs at the provider is
 S4's problem.
 
+N is 10, chosen during S3. Twenty would never fill within this prototype's
+conversations, so the bound could not be demonstrated working and the cost
+flatline this ADR describes would stay theoretical. Ten is five turns, enough
+for any follow up in a demo, and it fills. Production would raise it.
+
 Revisit when
 A conversation runs long enough in use that the window drops something the
 user still refers to, which would mean summarisation earns its keep.
@@ -1635,6 +1640,21 @@ described. 03's state table also requires Thinking to show "movement so it
 does not look frozen", so removing it without a backend-driven replacement
 trades one breach for another. Both sides of that need the same missing
 capability, so the animation is parked here rather than changed.
+
+**A closed decision that never reached the code.**
+
+ADR-021 set thinking_level minimal inside generation_config and recorded that
+it removed an 18 to 52 second silence and roughly 85 per cent of token spend.
+Starting S3, the agent found the adapter never sends the parameter: the stream
+opener passes model, system_instruction, input and stream, and nothing in the
+repo mentions thinking_level. The decision existed in the log and not in the
+build, and neither the tests nor the review caught it, because nothing asserts
+that a closed decision is wired.
+
+Found by the agent reading the ADR before implementing an unrelated slice.
+Wired as a declared deviation from the S3 brief. The lesson is that a decision
+log and a codebase drift silently unless something checks them against each
+other, and in a two day build the only thing checking was a coincidence.
 
 ### Decisions I made personally rather than delegating
 
