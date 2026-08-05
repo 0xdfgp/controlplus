@@ -17,7 +17,9 @@ import type { GenerationChunk } from '../../domain/ports/text-generation-port.ts
 import { ModelId } from '../../domain/value-objects/model-id.ts';
 import { GeminiTextGenerationAdapter } from './gemini-text-generation-adapter.ts';
 import type {
+  InteractionContentBlock,
   InteractionEvent,
+  InteractionImageBlock,
   InteractionStream,
   InteractionStreamOpener,
   InteractionStreamRequest,
@@ -80,8 +82,24 @@ async function collect(events: readonly InteractionEvent[]) {
   return chunks;
 }
 
+/** The blocks of the last turn the adapter built, when it built blocks at all. */
+function lastTurnBlocks(
+  opener: RecordedStreamOpener,
+): readonly InteractionContentBlock[] | null {
+  const content = opener.requests.at(-1)?.input.at(-1)?.content;
+  return typeof content === 'string' || content === undefined ? null : content;
+}
+
+function imageBlockOf(
+  opener: RecordedStreamOpener,
+): InteractionImageBlock | null {
+  const block = lastTurnBlocks(opener)?.find((b) => b.type === 'image');
+  return block === undefined ? null : block;
+}
+
 // The shared contract, run against the Gemini adapter over recorded fixtures.
 let sharedOpener = new RecordedStreamOpener(HAPPY_PATH_EVENTS);
+let imageOpener = new RecordedStreamOpener(HAPPY_PATH_EVENTS);
 
 describeTextGenerationPortContract('GeminiTextGenerationAdapter', {
   happyPath: () => {
@@ -117,6 +135,25 @@ describeTextGenerationPortContract('GeminiTextGenerationAdapter', {
   wasAborted: () => sharedOpener.aborted,
   reset: () => {
     sharedOpener.aborted = false;
+  },
+  // No longer optional for this adapter. The contract suite left these hooks
+  // optional because the S4 brief put Gemini out of scope, and the gap that
+  // left was real: the port declares an image and this adapter dropped it
+  // without a word. The evaluation is what needed it, so this is where it
+  // landed.
+  imageTurn: () => {
+    imageOpener = new RecordedStreamOpener(HAPPY_PATH_EVENTS);
+    return new GeminiTextGenerationAdapter(imageOpener, DEFAULT_MODEL);
+  },
+  sentImage: () => {
+    const block = imageBlockOf(imageOpener);
+    return block === null
+      ? null
+      : { mediaType: block.mime_type, data: block.data };
+  },
+  sentQuestionWithImage: () => {
+    const text = lastTurnBlocks(imageOpener)?.find((b) => b.type === 'text');
+    return text === undefined ? null : text.text;
   },
 });
 
@@ -181,6 +218,47 @@ describe('GeminiTextGenerationAdapter, Gemini specifics', () => {
     // called is product policy and was decided in the domain; an adapter that
     // rewrote this would be one holding a business rule.
     expect(opener.requests[0]?.input[0]?.content).toBe(marked);
+  });
+
+  it('sends a photo as an inline image block before the question text', async () => {
+    const { opener, adapter } = adapterFor(HAPPY_PATH_EVENTS);
+
+    for await (const _ of adapter.generate({
+      policy: ProductPolicy.current(),
+      history: [],
+      question: 'What does this message on my screen mean?',
+      image: {
+        data: 'LzlqLzRBQVFTa1pKUmdBQg==',
+        mediaType: 'image/png',
+        width: 790,
+        height: 1548,
+      },
+    })) {
+      void _;
+    }
+
+    // The shape is this API's, built here and nowhere else. Image first, then
+    // the question, matching the Anthropic adapter — a comparison between two
+    // providers only measures the providers if both were asked the same way.
+    expect(opener.requests[0]?.input.at(-1)?.content).toEqual([
+      { type: 'image', mime_type: 'image/png', data: 'LzlqLzRBQVFTa1pKUmdBQg==' },
+      { type: 'text', text: 'What does this message on my screen mean?' },
+    ]);
+  });
+
+  it('keeps a question with no photo as a plain string', async () => {
+    const { opener, adapter } = adapterFor(HAPPY_PATH_EVENTS);
+
+    for await (const _ of adapter.generate({
+      policy: ProductPolicy.current(),
+      history: [],
+      question: 'Is this a scam?',
+    })) {
+      void _;
+    }
+
+    // Adding photos must not change what a text-only turn sends.
+    expect(opener.requests[0]?.input.at(-1)?.content).toBe('Is this a scam?');
   });
 
   it('falls back to the configured model when the provider omits it', async () => {

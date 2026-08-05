@@ -9,29 +9,10 @@ import { Usage } from '../../domain/value-objects/usage.ts';
 import type {
   InteractionEvent,
   InteractionStreamOpener,
-  InteractionTurn,
 } from './interaction-stream.ts';
+import { toInteractionTurns } from './to-interaction-turns.ts';
 
 export const GEMINI_PROVIDER = 'google';
-
-/**
- * The domain's turns in the provider's vocabulary, ending with the question.
- *
- * Translation and nothing else. Which messages are here, what order they are
- * in and how a stopped answer is marked were all settled in the domain before
- * this was called; the only judgement made here is that Gemini calls the
- * assistant side "model".
- */
-function toInteractionTurns(request: GenerationRequest): InteractionTurn[] {
-  const turns = request.history.map(
-    (turn): InteractionTurn => ({
-      role: turn.author === 'assistant' ? 'model' : 'user',
-      content: turn.text,
-    }),
-  );
-  turns.push({ role: 'user', content: request.question });
-  return turns;
-}
 
 /**
  * TextGenerationPort over the Gemini Interactions API (ADR-017).
@@ -43,6 +24,13 @@ function toInteractionTurns(request: GenerationRequest): InteractionTurn[] {
  * Only `step.delta` events of type `text` become answer text. Thought summaries
  * and tool deltas are not the answer and are dropped, not streamed to someone
  * reading at their own pace.
+ *
+ * A photo travelling with the question becomes a provider image block in
+ * to-interaction-turns.ts (ADR-024). That was missing until the evaluation
+ * needed it: this adapter was written in S1, before images existed, and it
+ * silently dropped a declared field of the request it was handed. Nothing about
+ * the response path changes — an answer about a picture streams back as the
+ * same text deltas.
  */
 export class GeminiTextGenerationAdapter implements TextGenerationPort {
   constructor(

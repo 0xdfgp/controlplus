@@ -5,7 +5,8 @@
   "workspaces": [
     "packages/contracts",
     "apps/api",
-    "apps/mobile"
+    "apps/mobile",
+    "apps/eval"
   ],
   "engines": {
     "node": ">=20"
@@ -16,9 +17,11 @@
     "db:migrate": "npm run db:migrate --workspace @control-plus/api",
     "api": "npm run dev --workspace @control-plus/api",
     "mobile": "npm start --workspace @control-plus/mobile",
+    "eval": "npm run eval --workspace @control-plus/eval",
+    "eval:voice": "npm run eval:voice --workspace @control-plus/eval",
     "lint": "eslint .",
     "lint:boundaries": "node scripts/lint-boundaries.mjs apps/api/src",
-    "typecheck": "tsc -b apps/api packages/contracts && tsc -p apps/mobile --noEmit",
+    "typecheck": "tsc -b apps/api packages/contracts && tsc -p apps/mobile --noEmit && tsc -p apps/eval --noEmit",
     "test:unit": "vitest run",
     "test": "npm run lint:boundaries && npm run lint && npm run typecheck && npm run test:unit"
   },

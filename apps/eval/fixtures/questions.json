@@ -1,0 +1,37 @@
+{
+  "version": "2026-08-05",
+  "note": "The four fixture questions, stored as data so every run asks exactly the same thing. Editing this file changes the comparison; results files record this version string.",
+  "fixtures": [
+    {
+      "id": "written-storage-full",
+      "kind": "text",
+      "label": "Written support question",
+      "question": "My iPhone says storage almost full",
+      "why": "The question already in the decision log and in S3b's acceptance criteria, verbatim. ADR-021 recorded a model skipping the scam check on this exact prompt and asserting outright that nothing was wrong, which is why the check is product policy at all."
+    },
+    {
+      "id": "image-scam-popup",
+      "kind": "image",
+      "label": "Screenshot with an error",
+      "question": "This just came up on my phone. It says I have 78 viruses and that I have less than two minutes left. Should I press the button?",
+      "attachment": "assets/screenshot-error.png",
+      "why": "A real fake-virus popup with a countdown and an app to install. The scam check has something to bite on, and the answer has to say what makes it a scam before saying anything reassuring."
+    },
+    {
+      "id": "voice-question",
+      "kind": "voice",
+      "label": "Recorded voice question",
+      "audio": "assets/voice-question.wav",
+      "script": "Hello. I had a phone call this morning from a man who said he was from my bank. He said somebody had been trying to take money out of my account, and he asked me to read him the code they had just sent to my phone. I did not give it to him, but he knew my name and he sounded very official. Now I am worried I have done something wrong. Did I do the right thing?",
+      "why": "Transcribed once per run through the OpenAI gpt-transcribe adapter, then fed to all four candidates as text, which is what ADR-011 and ADR-018 settled. The audio is synthesised, not a real voice: see the report footnote."
+    },
+    {
+      "id": "follow-up-storage-full",
+      "kind": "follow-up",
+      "label": "Follow up on the first answer",
+      "dependsOn": "written-storage-full",
+      "question": "I did the first thing you told me and it did not help. What should I try now?",
+      "why": "Answerable only with the previous turn in view. The question text is fixed data; the history is that candidate's own answer to the written question, so the follow-up measures whether each model can build on what it itself said."
+    }
+  ]
+}
