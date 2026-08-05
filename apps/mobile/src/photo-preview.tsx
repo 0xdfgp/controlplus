@@ -79,7 +79,7 @@ const styles = StyleSheet.create({
     width: 96,
     height: 96,
     borderRadius: 12,
-    backgroundColor: '#E4E6F6',
+    backgroundColor: theme.colors.tint,
   },
   column: { flex: 1 },
   caption: {

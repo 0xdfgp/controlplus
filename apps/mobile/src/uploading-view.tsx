@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
     width: 180,
     height: 180,
     borderRadius: 14,
-    backgroundColor: '#E4E6F6',
+    backgroundColor: theme.colors.tint,
     marginBottom: theme.spacing(3),
   },
   track: {

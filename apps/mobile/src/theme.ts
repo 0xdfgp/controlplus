@@ -12,6 +12,12 @@ export const theme = {
     muted: '#4A4D5C',
     accent: '#3B3FD8',
     border: '#C9CBD8',
+    /**
+     * The pale accent behind a secondary button, the disclosure pill and the
+     * user's own words. Named here because four files had it written out by
+     * hand, and the question bubble makes it five.
+     */
+    tint: '#E4E6F6',
   },
   /** 18pt is the floor for body text, not the target. */
   bodyFontSize: 20,

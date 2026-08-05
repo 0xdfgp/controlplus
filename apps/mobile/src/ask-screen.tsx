@@ -1,16 +1,11 @@
 import { useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Composer } from './composer.tsx';
 import { ConversationView } from './conversation-view.tsx';
+import { DisclosurePill } from './disclosure-pill.tsx';
+import { FirstQuestion } from './first-question.tsx';
 import { StopButton } from './stop-button.tsx';
 import { SupportFooter } from './support-footer.tsx';
 import { theme } from './theme.ts';
@@ -41,8 +36,10 @@ export interface AskScreenProps {
  * composer while it is under way and nothing else — the conversation, if there
  * is one, stays exactly where it was.
  *
- * Deliberately absent, because the brief puts it in a later slice: the AI
- * disclosure chip (S6). E1 draws it; it is not built here.
+ * Two things sit outside both shapes, above and below everything: the AI
+ * disclosure pill and the support line. Neither is inside a branch, and that is
+ * the whole of how ADR-026's "persistent across every state" is kept true —
+ * there is no state in which the code could draw the screen without them.
  */
 export function AskScreen({
   baseUrl,
@@ -128,6 +125,8 @@ export function AskScreen({
             someone reading an answer. Dismissing the keyboard is handled where
             the taps land: keyboardShouldPersistTaps on the scroll regions. */}
         <View style={styles.body}>
+          <DisclosurePill />
+
           {started ? (
             <ConversationView
               history={turn.history}
@@ -139,21 +138,10 @@ export function AskScreen({
               progress={turn.progress}
             />
           ) : (
-            // Scrollable, because it can be taller than what is left above the
-            // keyboard once a photo is attached. Centred while it fits, which
-            // is what flexGrow with justifyContent gives.
-            <ScrollView
-              style={styles.first}
-              contentContainerStyle={styles.firstContent}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-            >
-              {/* E4 and E6 are the whole screen for a first question. */}
-              {speaking ? null : (
-                <Text style={styles.heading}>What would you like help with?</Text>
-              )}
+            // E4 and E6 are the whole screen for a first question.
+            <FirstQuestion speaking={speaking}>
               {speaking ? voicePanel : composer('Type your question here')}
-            </ScrollView>
+            </FirstQuestion>
           )}
 
           {turn.state === 'responding' ? (
@@ -181,18 +169,15 @@ export function AskScreen({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.colors.background },
   body: { flex: 1, paddingHorizontal: theme.spacing(3) },
-  first: { flex: 1 },
-  // Centred when there is room, scrollable when there is not — which is the
-  // case the moment a photo is attached and the keyboard is up.
-  firstContent: { flexGrow: 1, justifyContent: 'center' },
-  heading: {
-    fontSize: theme.headingFontSize,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: theme.spacing(3),
-  },
   // The divider E7 draws: the conversation above, the way to ask again below.
+  //
+  // flexShrink 0 is what keeps the promise that the conversation gets the
+  // screen and the composer only what it needs. The conversation region above
+  // is flex 1, so it is the thing that gives way when the OS font is scaled up
+  // and these controls grow — rather than the composer being squeezed until a
+  // button is unreachable.
   followUp: {
+    flexShrink: 0,
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
     paddingTop: theme.spacing(2),
