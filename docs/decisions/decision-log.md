@@ -1003,7 +1003,80 @@ Revisit when
 A provider reports reasoning usage under a different name or splits it
 further, which would make a single field too coarse.
 
+### ADR-021: thinking_level minimal, with the scam check moved into product policy
+Date: 2026-08-05
+Status: accepted
 
+Context
+S1 measured 18 to 52 seconds of dead air before the first text delta, with
+76 to 90 per cent of billed generation going to reasoning tokens the user
+never sees. That breaks MLP criterion 1, which 05-mlp-definition.md treats
+as not negotiable, and it inflates the cost figure the brief asks for.
+
+A live probe established that thinking_level is accepted inside
+generation_config on the Interactions API. The earlier six failures were
+placement, not availability: the parameter had been sent at the top level.
+This does not reopen ADR-017: same provider, same API, generateContent
+never called.
+
+Measured: minimal takes reasoning to exactly zero tokens across seven runs
+and first text to roughly one second. low, medium and high are monotonic
+but all three still spend 1,000 to 1,800 thought tokens and leave six to
+ten seconds of silence, so there is no useful middle setting.
+
+Options considered
+A: minimal by default, with the scam check written into product policy.
+B: keep reasoning, accept the silence, decide it all at D18.
+
+Decision
+A. The finding that forced it: in one of seven minimal runs the model
+skipped the scam check and asserted outright that the message was normal
+and nobody was trying to trick anyone. A fake "storage almost full" popup
+is a real scam vector, and 07-product-context.md states that a confident
+wrong answer here costs the user money.
+
+The response is not to buy the check back with reasoning tokens. Today that
+check happens because the model thinks long enough, which is a safety
+guarantee held by accident. 02-architecture-principles.md says the
+assistant's behavioural rules are product policy and live in the domain,
+versioned. So the check becomes an explicit rule in the domain policy with
+a test, and stops depending on how much reasoning was purchased.
+
+Consequences
+The silence and roughly 85 per cent of token spend both go away. The
+conversation cost figure becomes meaningful rather than dominated by
+invisible tokens.
+
+The product policy grows and now carries a safety-critical rule that must
+be tested rather than assumed. That test is not optional: it is what makes
+this decision safe.
+
+Honest limit: the single skipped scam check is not established as a
+regression. Two control runs cannot separate a real quality drop at minimal
+from a tail that occurs at every level. The write up should say so. The
+experiment that would settle it is matched samples at minimal versus unset,
+scored for presence of the scam check, and it is not run here.
+
+The per-level numbers were measured on gemini-3.6-flash after free-tier
+quota on gemini-3.5-flash was exhausted. Parameter acceptance is proven on
+3.5-flash; the zero-thought-token result is not, and the confirming run
+could not be made because the quota did not reset within the exercise. The
+write up states this as a gap rather than implying the configured model was
+verified. The first live run after the change is the confirmation, and if
+minimal does not produce zero thought tokens on 3.5-flash, this decision is
+wrong on that model rather than wrong in general.
+
+Not decided here: which model is used, and whether harder questions get a
+different configuration. The probe showed a four to six times latency gap
+between 3.5-flash and 3.6-flash at similar thought token counts, confounded
+by session load. Both belong to D18.
+
+Roughly 30 minutes: the parameter, the policy rule, and its test.
+
+Revisit when
+The matched-sample experiment shows minimal degrades scam handling in a way
+the policy rule does not recover, or D18 selects a model whose reasoning
+behaviour differs.
 
 
 ## Backlog (deliberately deferred)
@@ -1084,6 +1157,94 @@ only lowers the probability. Mitigation: prompts no longer name the modes at
 all, even negated. Recorded because a sensor that fires toward the dangerous
 action is worse than no sensor.
 
+**Answers did not render progressively, and the cause was not in our code.**
+
+Found by hand on device: the screen stayed on thinking for the whole
+generation, then the complete answer appeared at once. Three candidates were
+proposed, in order of suspicion: the adapter draining the provider stream
+before yielding, the route failing to flush, the client buffering. All three
+were wrong. Instrumented with a raw socket client against the live API:
+
+    11ms  stage(thinking)
+          ... 14.9 seconds of nothing ...
+ 14921ms  stage(responding)
+ 14921ms  message.delta  #1
+   ...    8 deltas, 8 separate TCP chunks, spread over 493ms
+ 16904ms  message.done
+
+A longer answer gave the same shape: 29.7s of silence, then 14 deltas over
+1044ms. The pipeline streams correctly at whatever pace the model emits. What
+looks like "all at once" is 167 output tokens arriving in half a second, which
+is below the threshold at which a person perceives text building up.
+
+The silence is the model thinking: 949 thought tokens against 167 output on
+that turn. So the defect was never in the streaming path. It is that 92% of
+the turn has nothing to show, which breaks MLP criterion 1 and 03's rule that
+a step over a second or two must be surfaced as a distinct backend event.
+
+**Why the green suite could not have caught it.** The e2e stub replayed
+fixtures from an async generator with no delay, so every chunk was available
+in one microtask drain. A pipeline that buffered everything and flushed at
+close produced the identical event *sequence*, and sequence was all that was
+asserted. The suite was not weak; it was asking a question that could not
+distinguish the two cases. Now fixed: the stub pauses between chunks and the
+tests assert separation in time and separate socket reads. Both were verified
+by mutation — buffering the server makes three of them fail, and the ordering
+assertion still passes, which is the whole point.
+
+**Parked: filling the thinking silence is not currently possible.**
+
+The instruction was to use the thought_summary deltas the adapter discards as
+evidence of progress without showing the reasoning text. That premise does not
+hold. Full event timeline from the live Interactions API:
+
+     282ms  interaction.created
+     284ms  interaction.status_update
+            <- 18,759ms with no event of any kind
+   19043ms  step.start
+   19043ms  step.delta(thought_signature)
+   19044ms  step.delta(text)   first text
+
+There are no thought_summary deltas to use. The only non-text delta is a
+single thought_signature, an opaque signature string rather than a summary,
+and it arrives at 19043ms — the same millisecond as the first text, not
+during the wait. Nothing at all is emitted in the 18.8 second gap, so there is
+no backend event to drive an indicator from.
+
+Every documented way to turn summaries on is rejected by the deployed API,
+though the SDK's TypeScript types declare the first of them:
+
+    thinking_summaries: 'auto'          Unknown parameter 'thinking_summaries'.
+    thinking_level: 'low'               Unknown parameter 'thinking_level'.
+    thinking_level: 'minimal'           Unknown parameter 'thinking_level'.
+    thinking_config.include_thoughts    Unknown parameter 'thinking_config'.
+    thinkingConfig.includeThoughts      Unknown parameter 'thinkingConfig'.
+    generation_config.thinking_config   Unknown parameter 'thinking_config' at
+                                        'generation_config'.
+    include_thoughts (top level)        Unknown parameter 'include_thoughts'.
+
+All returned code invalid_request. This is the same class of trap as the
+ADR-020 discrepancy: the SDK types are ahead of the deployed API, and only a
+live call tells you which.
+
+generateContent, with thinkingConfig.includeThoughts, does stream them: three
+thought parts, the first at 1ms. So the capability exists on the API that
+ADR-017 closed against and the S1 brief explicitly forbids. That is the
+decision to take, and it was not taken here.
+
+A placeholder indicator was offered and refused, correctly: any animation not
+driven by a backend event is client-side time-based UI, which 03 forbids, and
+it would keep moving after the backend had died. A screen that lies to a
+frightened user is worse than one that is honest about waiting.
+
+That ruling implicates existing code. The thinking indicator currently loops a
+dot animation on a client timer, which has exactly the property just
+described. 03's state table also requires Thinking to show "movement so it
+does not look frozen", so removing it without a backend-driven replacement
+trades one breach for another. Both sides of that need the same missing
+capability, so the animation is parked here rather than changed.
+
+
 
 
 ### Decisions I made personally rather than delegating
@@ -1100,6 +1261,22 @@ action is worse than no sensor.
 - Re-reading every remaining estimate as an upper bound after S1 came in at
   a quarter of its estimate, rather than leaving the inflated numbers to
   justify cuts that were no longer necessary.
+- What the user sees while the model reasons. I proposed
+  discarding the reasoning text and using the thought deltas only as a
+  progress signal. I set the requirement more precisely: neither the raw
+  reasoning nor an empty wait, but something in between, calibrated so it
+  reassures rather than alarms. In an anti-scam product the model's
+  intermediate thoughts about fraud are exactly the wrong thing to put in
+  front of a frightened 78-year-old, and a slow reader may take them for the
+  answer. The silence has to be filled with something that says work is
+  happening without saying what the work is.
+- Treating a safety behaviour as product policy rather than as a property
+  bought with reasoning tokens. Probes showed that capping reasoning removed
+  an 18 to 52 second silence and 85 per cent of token spend, but in one run
+  of seven the model dropped the scam check and reassured outright. Rather
+  than pay for reasoning to keep a guarantee that was holding by accident, I
+  moved the scam check into the versioned domain policy with a test, where
+  02-architecture-principles.md says behavioural rules belong (ADR-021).
 
 ### AI development tools used
 
