@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ImagePart } from '../content/image-part.ts';
 import { TextPart } from '../content/text-part.ts';
 import { ConversationId } from '../value-objects/conversation-id.ts';
 import { MessageId } from '../value-objects/message-id.ts';
@@ -16,6 +17,72 @@ const provenance = Provenance.aiGenerated(
   'google',
 );
 const usage = Usage.fromCounts(12, 34, 56);
+const photo = ImagePart.of({
+  mediaType: 'image/jpeg',
+  width: 1568,
+  height: 1176,
+  hash: 'a3f1b2c4d5e6',
+});
+
+describe('Message.fromUser carrying a photo (ADR-014, ADR-024)', () => {
+  it('accepts an image part with the question about it', () => {
+    const message = Message.fromUser({
+      id: messageId,
+      conversationId,
+      parts: [photo, TextPart.of('What does this message on my screen mean?')],
+      createdAt,
+    });
+
+    expect(message.author).toBe('user');
+    expect(message.parts).toHaveLength(2);
+    expect(message.parts[0]).toBeInstanceOf(ImagePart);
+    // A photo with a question is one message carrying two parts, not a second
+    // kind of message. That is the whole of ADR-014's argument for the union.
+    expect(message.text()).toBe('What does this message on my screen mean?');
+  });
+
+  it('accepts an image part on its own, with no text at all', () => {
+    const message = Message.fromUser({
+      id: messageId,
+      conversationId,
+      parts: [photo],
+      createdAt,
+    });
+
+    expect(message.author).toBe('user');
+    expect(message.parts).toHaveLength(1);
+    // No text, and still a valid message: the part is what was sent. The wire
+    // request still requires a question, so this is the domain being ready for
+    // a photo-only turn rather than a turn anyone can make today.
+    expect(message.text()).toBe('');
+  });
+
+  it('still rejects provenance and usage when a photo is what was sent', () => {
+    expect(() =>
+      Message.fromUser({
+        id: messageId,
+        conversationId,
+        parts: [photo],
+        createdAt,
+        provenance,
+      } as unknown as Parameters<typeof Message.fromUser>[0]),
+    ).toThrow(/rejects provenance/);
+  });
+
+  it('keeps no bytes anywhere in the message', () => {
+    const message = Message.fromUser({
+      id: messageId,
+      conversationId,
+      parts: [photo, TextPart.of('What is this?')],
+      createdAt,
+    });
+
+    // ADR-024 in one assertion: the image travelled to the provider inside the
+    // turn and what is left behind references it.
+    expect(JSON.stringify(message)).not.toContain('data');
+    expect(message.parts[0]).toEqual(photo);
+  });
+});
 
 describe('Message.fromUser', () => {
   it('builds a user message from at least one content part', () => {

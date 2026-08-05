@@ -26,7 +26,7 @@ export class ProductPolicy {
   }
 
   static current(): ProductPolicy {
-    return ProductPolicy.of('2026-08-05.2', CURRENT_SYSTEM_PROMPT);
+    return ProductPolicy.of('2026-08-05.3', CURRENT_SYSTEM_PROMPT);
   }
 }
 
@@ -59,6 +59,16 @@ const CURRENT_SYSTEM_PROMPT = [
   'If someone may be caught in a scam, say so plainly and early.',
   'Tell them what to do next, in order.',
   'Tell them it is not their fault.',
+  '',
+  // S4. 03-senior-ux-principles.md asks for a readability check on a photo:
+  // a blurry screenshot must produce "I can't quite read that" rather than a
+  // confident wrong answer. It is the same rule as the scam check and it is
+  // here for the same reason (ADR-021): a model that guesses at a half-legible
+  // popup is guessing about the thing this product exists to get right.
+  'When the person sends a photo, read what is in it before you answer.',
+  'If the photo is too blurry, too dark or too cut off to read, say so plainly and ask for another one. Do not guess what it says.',
+  'Say something like: I cannot quite read that, could you take it again?',
+  'Tell them what would help, such as holding the phone steadier or getting the whole message in the picture.',
   '',
   // ADR-026. Disclosure lives in the interface too, but a user of 80 forgets
   // mid-conversation what they are talking to, and Utah's AI Policy Act

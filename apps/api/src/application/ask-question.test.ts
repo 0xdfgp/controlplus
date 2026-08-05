@@ -13,10 +13,13 @@ import {
   FailingTextGeneration,
   ScriptedTextGeneration,
 } from '../../test/fakes/scripted-text-generation.ts';
+import { isImagePart } from '../domain/content/content-part.ts';
 import { Conversation } from '../domain/entities/conversation.ts';
 import { ProviderUnavailable } from '../domain/errors/provider-unavailable.ts';
+import { MAX_ATTACHMENT_BYTES } from '../domain/policy/attachment-policy.ts';
 import {
   CONTEXT_WINDOW_MESSAGES,
+  PHOTO_IN_HISTORY_NOTICE,
   STOPPED_ANSWER_NOTICE,
 } from '../domain/policy/conversation-context.ts';
 import { ProductPolicy } from '../domain/policy/product-policy.ts';
@@ -29,6 +32,16 @@ import { AskQuestion } from './ask-question.ts';
 import type { AskQuestionEvent } from './ask-question.ts';
 
 const conversationId = ConversationId.fromString('conv-1');
+
+/** A photo as it reaches the use case: already decoded, counted and hashed. */
+const photo = {
+  data: 'iVBORw0KGgoAAAANSUhEUg-pretend-this-is-a-resized-jpeg',
+  mediaType: 'image/jpeg',
+  width: 1568,
+  height: 1176,
+  hash: 'a3f1b2c4d5e6f70819',
+  byteSize: 482_113,
+};
 
 function build(port: TextGenerationPort) {
   const conversations = new InMemoryConversationRepository();
@@ -397,6 +410,186 @@ describe('AskQuestion, assembling the conversation so far', () => {
     );
     expect(assistantTurn?.text).toContain('That message has ');
     expect(assistantTurn?.text).toContain(STOPPED_ANSWER_NOTICE);
+  });
+});
+
+describe('AskQuestion, a turn carrying a photo (ADR-024)', () => {
+  const port = () =>
+    new ScriptedTextGeneration([
+      { kind: 'text', text: 'That is a fake warning. ' },
+      { kind: 'text', text: 'Do not tap it.' },
+      completionChunk(),
+    ]);
+
+  it('carries the image to the port with this turn', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+
+    await collect(
+      useCase.execute({
+        conversationId,
+        question: 'What does this message on my screen mean?',
+        image: photo,
+      }),
+    );
+
+    const sent = scripted.seenRequests[0]?.image;
+    expect(sent?.data).toBe(photo.data);
+    expect(sent?.mediaType).toBe('image/jpeg');
+    expect(sent?.width).toBe(1568);
+    expect(sent?.height).toBe(1176);
+  });
+
+  it('sends no image at all on a turn that has none', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+
+    await collect(useCase.execute({ conversationId, question: 'Is this a scam?' }));
+
+    expect(scripted.seenRequests[0]?.image).toBeUndefined();
+  });
+
+  it('writes the user message as an ImagePart and the question, in that order', async () => {
+    const { useCase, messages } = build(port());
+
+    await collect(
+      useCase.execute({
+        conversationId,
+        question: 'What does this message on my screen mean?',
+        image: photo,
+      }),
+    );
+
+    const user = messages.userMessages()[0];
+    expect(user?.parts).toHaveLength(2);
+    const first = user?.parts[0];
+    if (first === undefined || !isImagePart(first)) {
+      throw new Error('expected an image part first');
+    }
+    expect(first.mediaType).toBe('image/jpeg');
+    expect(first.width).toBe(1568);
+    expect(first.height).toBe(1176);
+    expect(first.hash).toBe(photo.hash);
+    expect(user?.text()).toBe('What does this message on my screen mean?');
+  });
+
+  it('keeps no bytes in what is written', async () => {
+    const { useCase, messages } = build(port());
+
+    await collect(
+      useCase.execute({ conversationId, question: 'What is this?', image: photo }),
+    );
+
+    // ADR-024. The image travelled to the provider inside this turn and what is
+    // left behind references it.
+    expect(JSON.stringify(messages.saved)).not.toContain(photo.data);
+  });
+});
+
+describe('AskQuestion, a follow up after a photo turn (AC6)', () => {
+  const port = () =>
+    new ScriptedTextGeneration([
+      { kind: 'text', text: 'Delete the message.' },
+      completionChunk(),
+    ]);
+
+  it('does not resend the bytes, because the Message holds a reference', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+
+    await collect(
+      useCase.execute({
+        conversationId,
+        question: 'What does this message on my screen mean?',
+        image: photo,
+      }),
+    );
+    await collect(
+      useCase.execute({ conversationId, question: 'What should I do about it?' }),
+    );
+
+    const followUp = scripted.seenRequests[1];
+    expect(followUp?.image).toBeUndefined();
+    // The whole request, not just the image field: a follow up about a photo
+    // costs what a text follow up costs (ADR-023).
+    expect(JSON.stringify(followUp)).not.toContain(photo.data);
+  });
+
+  it('still tells the model a photo was part of that question', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+
+    await collect(
+      useCase.execute({
+        conversationId,
+        question: 'What does this message on my screen mean?',
+        image: photo,
+      }),
+    );
+    await collect(
+      useCase.execute({ conversationId, question: 'What should I do about it?' }),
+    );
+
+    const earlier = scripted.seenRequests[1]?.history[0];
+    expect(earlier?.author).toBe('user');
+    expect(earlier?.text).toContain(PHOTO_IN_HISTORY_NOTICE);
+    expect(earlier?.text).toContain('What does this message on my screen mean?');
+  });
+});
+
+describe('AskQuestion, a photo over the limit (AC4)', () => {
+  const port = () => new ScriptedTextGeneration([completionChunk()]);
+
+  const oversized = { ...photo, byteSize: MAX_ATTACHMENT_BYTES + 1 };
+
+  it('fails the turn naming AttachmentTooLarge', async () => {
+    const { useCase } = build(port());
+
+    const events = await collect(
+      useCase.execute({
+        conversationId,
+        question: 'What is this?',
+        image: oversized,
+      }),
+    );
+
+    expect(events.map((e) => e.kind)).toEqual(['failed']);
+    const failed = events[0];
+    if (failed?.kind !== 'failed') {
+      throw new Error('expected a failed event');
+    }
+    expect(failed.event.errorClass).toBe('AttachmentTooLarge');
+    expect(failed.event.conversationId.value).toBe('conv-1');
+  });
+
+  it('never reaches the provider', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+
+    await collect(
+      useCase.execute({
+        conversationId,
+        question: 'What is this?',
+        image: oversized,
+      }),
+    );
+
+    expect(scripted.seenRequests).toHaveLength(0);
+  });
+
+  it('writes nothing at all: a photo that cannot be sent is not a turn', async () => {
+    const { useCase, messages, conversations } = build(port());
+
+    await collect(
+      useCase.execute({
+        conversationId,
+        question: 'What is this?',
+        image: oversized,
+      }),
+    );
+
+    expect(messages.saved).toHaveLength(0);
+    expect(conversations.saved).toHaveLength(0);
   });
 });
 

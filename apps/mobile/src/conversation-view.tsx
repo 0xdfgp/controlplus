@@ -6,6 +6,7 @@ import type { LoggedTurn } from './conversation-log.ts';
 import { theme } from './theme.ts';
 import { ThinkingIndicator } from './thinking-indicator.tsx';
 import type { TurnState } from './turn-machine.ts';
+import { UploadingView } from './uploading-view.tsx';
 
 export interface ConversationViewProps {
   readonly history: readonly LoggedTurn[];
@@ -14,6 +15,8 @@ export interface ConversationViewProps {
   readonly question: string;
   readonly answer: string;
   readonly errorMessage: string | null;
+  readonly photoUri: string | null;
+  readonly progress: number | null;
 }
 
 /**
@@ -32,6 +35,8 @@ export function ConversationView({
   question,
   answer,
   errorMessage,
+  photoUri,
+  progress,
 }: ConversationViewProps): React.JSX.Element {
   const scroll = useRef<ScrollView>(null);
   const hasLiveTurn = question.length > 0;
@@ -57,6 +62,14 @@ export function ConversationView({
       style={styles.region}
       contentContainerStyle={styles.content}
       accessibilityLabel="Your conversation so far"
+      // Without this a tap while the keyboard is up is spent closing the
+      // keyboard and never reaches what was tapped, so the first press of any
+      // button does nothing. "handled" gives both behaviours at once: a tap on
+      // a control works, and a tap on empty space puts the keyboard away.
+      keyboardShouldPersistTaps="handled"
+      // Reading the answer is a reason to want the keyboard gone. Starting to
+      // scroll says so without needing to aim at anything.
+      keyboardDismissMode="on-drag"
     >
       {history.map((turn, index) => (
         <AnswerView
@@ -65,16 +78,25 @@ export function ConversationView({
           question={turn.question}
           answer={turn.answer}
           errorMessage={turn.errorMessage}
+          photoUri={turn.photoUri}
           live={false}
         />
       ))}
 
-      {hasLiveTurn ? (
+      {/* While the photo is still going out there is no turn to render yet:
+          E5 is the whole screen, and the question appears with it once the
+          upload finishes. */}
+      {state === 'uploading' ? (
+        <UploadingView photoUri={photoUri} progress={progress} />
+      ) : null}
+
+      {hasLiveTurn && state !== 'uploading' ? (
         <AnswerView
           state={state}
           question={question}
           answer={answer}
           errorMessage={errorMessage}
+          photoUri={photoUri}
           live
         />
       ) : null}

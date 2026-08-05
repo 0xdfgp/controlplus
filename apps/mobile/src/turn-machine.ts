@@ -9,6 +9,7 @@
  */
 export type TurnState =
   | 'idle'
+  | 'uploading'
   | 'thinking'
   | 'responding'
   | 'stopped'
@@ -19,18 +20,42 @@ export type TurnState =
  *
  * `stop` is the user tapping Stop. There is no server event behind it: the tap
  * closes the connection, so nothing is coming back to confirm it.
+ *
+ * `upload` is asking with a photo attached, and `sent` is the last byte of it
+ * leaving the phone. Both are client-only: no server event drives them, because
+ * the server has not seen the request yet.
  */
-export type TurnEvent = 'ask' | 'responding' | 'completed' | 'stop' | 'fail';
+export type TurnEvent =
+  | 'ask'
+  | 'upload'
+  | 'sent'
+  | 'responding'
+  | 'completed'
+  | 'stop'
+  | 'fail';
+
+const READY: Partial<Record<TurnEvent, TurnState>> = {
+  ask: 'thinking',
+  upload: 'uploading',
+};
 
 const TRANSITIONS: Record<TurnState, Partial<Record<TurnEvent, TurnState>>> = {
   // A finished turn leaves its answer on screen and its input ready below, so
   // asking again is the only thing that moves it. That implicit return is
   // ADR-022; without it the app answers one question per launch.
-  idle: { ask: 'thinking' },
+  idle: READY,
+  // A photo can take real time to leave the phone on a slow connection, and a
+  // screen with no sign of progress reads as broken (E5). ADR-022 filed this
+  // state under S5, before ADR-018 removed audio upload from the product
+  // entirely — the photo is what needs it, and it arrives here.
+  //
+  // No `stop`: E5 draws no Stop control, and there is nothing to stop at the
+  // provider yet. The turn is still on the way out.
+  uploading: { sent: 'thinking', fail: 'failed' },
   thinking: { responding: 'responding', completed: 'idle', fail: 'failed' },
   responding: { completed: 'idle', stop: 'stopped', fail: 'failed' },
-  stopped: { ask: 'thinking' },
-  failed: { ask: 'thinking' },
+  stopped: READY,
+  failed: READY,
 };
 
 /**
@@ -55,7 +80,9 @@ export function transition(
   return TRANSITIONS[state][event] ?? null;
 }
 
-/** Whether the turn is waiting on the server, and so cannot accept a question. */
+/** Whether a turn is under way, and so cannot accept a question. */
 export function isInFlight(state: TurnState): boolean {
-  return state === 'thinking' || state === 'responding';
+  return (
+    state === 'uploading' || state === 'thinking' || state === 'responding'
+  );
 }

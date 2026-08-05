@@ -45,18 +45,62 @@ export interface TextGenerationPortScenarios {
   readonly failedStatus: () => TextGenerationPort;
   /** The completion carries no usage block. */
   readonly noUsage: () => TextGenerationPort;
+  /**
+   * Maps a photo travelling with the question onto the provider's own image
+   * block, and reports what was sent (S4, ADR-024).
+   *
+   * OPTIONAL, and the reason is worth stating rather than leaving as a `?`.
+   * The S4 brief asks this suite to gain an image scenario and puts the Gemini
+   * adapter out of scope in the same document. Making it mandatory would fail
+   * the Gemini adapter, which is still in the tree and still implements this
+   * port. An adapter that does not declare these two hooks does not get the
+   * cases below: nothing is marked as pending and no assertion is reduced to
+   * nothing, the block is simply not generated.
+   *
+   * S10 wires Gemini and supplies them, at which point this stops being
+   * optional. Until then the contract is uniform on everything else and this
+   * one capability is declared per adapter, which is honest about where the
+   * build actually is.
+   */
+  readonly imageTurn?: (() => TextGenerationPort) | undefined;
+  /** What the adapter handed the provider for the image, if anything. */
+  readonly sentImage?:
+    | (() => { readonly mediaType: string; readonly data: string } | null)
+    | undefined;
+  /** Whether the question text still reached the provider alongside it. */
+  readonly sentQuestionWithImage?: (() => string | null) | undefined;
   /** True once the adapter has released the provider stream. */
   readonly wasAborted: () => boolean;
   /** Resets abort tracking between cases. */
   readonly reset: () => void;
 }
 
-async function collect(port: TextGenerationPort): Promise<GenerationChunk[]> {
+/**
+ * The photo the image scenario sends. Shared, so an adapter's own tests assert
+ * against the same bytes the contract does.
+ */
+export const CONTRACT_IMAGE = {
+  data: 'LzlqLzRBQVFTa1pKUmdBQkFRQUFBUUFCQUFELy1ub3QtYS1yZWFsLXBob3Rv',
+  mediaType: 'image/jpeg',
+  width: 1568,
+  height: 1176,
+} as const;
+
+export const CONTRACT_IMAGE_QUESTION = 'What does this message on my screen mean?';
+
+async function collect(
+  port: TextGenerationPort,
+  image?: typeof CONTRACT_IMAGE,
+): Promise<GenerationChunk[]> {
   const chunks: GenerationChunk[] = [];
   for await (const chunk of port.generate({
     policy: ProductPolicy.current(),
     history: [],
-    question: 'Is this text about my bank a scam?',
+    question:
+      image === undefined
+        ? 'Is this text about my bank a scam?'
+        : CONTRACT_IMAGE_QUESTION,
+    image,
   })) {
     chunks.push(chunk);
   }
@@ -271,6 +315,65 @@ export function describeTextGenerationPortContract(
       );
 
       expect(scenarios.wasAborted()).toBe(true);
+    });
+
+    describeImageMapping(scenarios);
+  });
+}
+
+/**
+ * The image cases, generated only for an adapter that declares them.
+ *
+ * See `imageTurn` on the scenarios interface for why this is conditional
+ * rather than mandatory. The condition is on the scenario being declared, not
+ * on a runtime flag: an adapter that supplies the hooks gets every case below,
+ * and no case is ever skipped or emptied.
+ */
+function describeImageMapping(scenarios: TextGenerationPortScenarios): void {
+  const imageTurn = scenarios.imageTurn;
+  const sentImage = scenarios.sentImage;
+  const sentQuestionWithImage = scenarios.sentQuestionWithImage;
+
+  if (
+    imageTurn === undefined ||
+    sentImage === undefined ||
+    sentQuestionWithImage === undefined
+  ) {
+    return;
+  }
+
+  describe('a photo travelling with the question (ADR-024)', () => {
+    it('maps it onto the provider image block, bytes intact', async () => {
+      await collect(imageTurn(), CONTRACT_IMAGE);
+
+      const image = sentImage();
+      expect(image?.mediaType).toBe(CONTRACT_IMAGE.mediaType);
+      expect(image?.data).toBe(CONTRACT_IMAGE.data);
+    });
+
+    it('keeps the question alongside it, not instead of it', async () => {
+      await collect(imageTurn(), CONTRACT_IMAGE);
+
+      // The photo and the question about it are one turn. An adapter that sent
+      // the picture and dropped the words would produce a confident answer to
+      // a question nobody asked.
+      expect(sentQuestionWithImage()).toBe(CONTRACT_IMAGE_QUESTION);
+    });
+
+    it('sends no image block on a turn that has no photo', async () => {
+      await collect(imageTurn());
+
+      expect(sentImage()).toBeNull();
+    });
+
+    it('answers an image turn through the same chunks as any other', async () => {
+      const chunks = await collect(imageTurn(), CONTRACT_IMAGE);
+
+      // Nothing about the response path changes because a picture went up.
+      const kinds = chunks.map((c) => c.kind);
+      expect(kinds[0]).toBe('started');
+      expect(kinds.at(-1)).toBe('completion');
+      expect(kinds).toContain('text');
     });
   });
 }

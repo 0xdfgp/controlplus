@@ -4,9 +4,11 @@ import { isAskQuestionRequest } from '@control-plus/contracts';
 import type { StreamErrorClass } from '@control-plus/contracts';
 
 import type { AskQuestion } from '../../application/ask-question.ts';
+import type { AskQuestionImage } from '../../application/user-message.ts';
 import { ConversationId } from '../../domain/value-objects/conversation-id.ts';
 import type { Clock } from '../../domain/ports/clock.ts';
 import type { TurnLogger } from '../logging/turn-logger.ts';
+import { decodeImageAttachment } from './image-attachment.ts';
 import { SseWriter } from './sse-writer.ts';
 
 export interface AskRouteDependencies {
@@ -18,6 +20,7 @@ export interface AskRouteDependencies {
 const KNOWN_ERROR_CLASSES: readonly StreamErrorClass[] = [
   'ProviderUnavailable',
   'ConversationNotFound',
+  'AttachmentTooLarge',
 ];
 
 function toStreamErrorClass(name: string): StreamErrorClass {
@@ -58,6 +61,19 @@ export function registerAskRoute(
     }
 
     const question = request.body.question;
+
+    // Decoded before the stream is hijacked, so an unreadable photo is a 400
+    // with a body rather than an error event on a stream that then closes. The
+    // size is not judged here: that is a domain rule with a domain error.
+    let image: AskQuestionImage | undefined;
+    if (request.body.image !== undefined) {
+      try {
+        image = decodeImageAttachment(request.body.image);
+      } catch {
+        return reply.code(400).send({ error: 'The photo could not be read.' });
+      }
+    }
+
     const startedAt = dependencies.clock.now().getTime();
     const sse = new SseWriter(reply.raw);
 
@@ -90,6 +106,7 @@ export function registerAskRoute(
       for await (const event of dependencies.askQuestion.execute({
         conversationId,
         question,
+        image,
       })) {
         if (clientGone) {
           // Cancellation is stopping iteration (ADR-012). Breaking makes the
@@ -153,6 +170,18 @@ export function registerAskRoute(
         requestId: request.id,
         latencyMs: dependencies.clock.now().getTime() - startedAt,
         question,
+        // That the turn carried a photo, what kind and how big. Never the
+        // bytes and never the hash: the operator needs to know an image was in
+        // the request when they read a strange input token count, and nothing
+        // more than that.
+        image:
+          image === undefined
+            ? null
+            : {
+                mediaType: image.mediaType,
+                width: image.width,
+                height: image.height,
+              },
         inputTokens,
         outputTokens,
         thoughtTokens,

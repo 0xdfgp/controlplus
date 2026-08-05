@@ -10,7 +10,10 @@ import {
   SUBSTITUTED_MODEL_EVENTS,
   THINKING_EVENTS,
 } from '../../../test/__fixtures__/anthropic-message-events.ts';
-import { describeTextGenerationPortContract } from '../../../test/contracts/text-generation-port.contract.ts';
+import {
+  CONTRACT_IMAGE,
+  describeTextGenerationPortContract,
+} from '../../../test/contracts/text-generation-port.contract.ts';
 import { ProviderUnavailable } from '../../domain/errors/provider-unavailable.ts';
 import { ProductPolicy } from '../../domain/policy/product-policy.ts';
 import type { GenerationChunk } from '../../domain/ports/text-generation-port.ts';
@@ -18,9 +21,11 @@ import { ModelId } from '../../domain/value-objects/model-id.ts';
 import { AnthropicTextGenerationAdapter } from './anthropic-text-generation-adapter.ts';
 import type {
   AnthropicEvent,
+  MessageImageBlock,
   MessageStream,
   MessageStreamOpener,
   MessageStreamRequest,
+  MessageTextBlock,
 } from './message-stream.ts';
 
 const DEFAULT_MODEL = ModelId.fromString('claude-sonnet-4-5');
@@ -102,8 +107,27 @@ async function collect(events: readonly AnthropicEvent[]) {
   return chunks;
 }
 
+/**
+ * The blocks of the last turn the adapter sent, when it sent blocks.
+ *
+ * A turn with no photo is a plain string, which is what every turn before S4
+ * sent and what these helpers return null for.
+ */
+function lastTurnBlocks(
+  opener: RecordedStreamOpener,
+): readonly (MessageImageBlock | MessageTextBlock)[] | null {
+  const content = opener.requests.at(-1)?.messages.at(-1)?.content;
+  return typeof content === 'string' || content === undefined ? null : content;
+}
+
+function imageBlockOf(opener: RecordedStreamOpener): MessageImageBlock | null {
+  const block = lastTurnBlocks(opener)?.find((b) => b.type === 'image');
+  return block === undefined ? null : block;
+}
+
 // The shared contract, run against the Anthropic adapter over its own fixtures.
 let sharedOpener = new RecordedStreamOpener(HAPPY_PATH_EVENTS);
+let imageOpener = new RecordedStreamOpener(HAPPY_PATH_EVENTS);
 
 describeTextGenerationPortContract('AnthropicTextGenerationAdapter', {
   happyPath: () => {
@@ -144,6 +168,22 @@ describeTextGenerationPortContract('AnthropicTextGenerationAdapter', {
   wasAborted: () => sharedOpener.aborted,
   reset: () => {
     sharedOpener.aborted = false;
+  },
+  // Anthropic accepts images (ADR-032), so it declares the image scenario.
+  // Gemini does not, and S10 is where that changes.
+  imageTurn: () => {
+    imageOpener = new RecordedStreamOpener(HAPPY_PATH_EVENTS);
+    return new AnthropicTextGenerationAdapter(imageOpener, DEFAULT_MODEL);
+  },
+  sentImage: () => {
+    const block = imageBlockOf(imageOpener);
+    return block === null
+      ? null
+      : { mediaType: block.source.media_type, data: block.source.data };
+  },
+  sentQuestionWithImage: () => {
+    const text = lastTurnBlocks(imageOpener)?.find((b) => b.type === 'text');
+    return text === undefined ? null : text.text;
   },
 });
 
@@ -281,6 +321,90 @@ describe('AnthropicTextGenerationAdapter, Anthropic specifics', () => {
         }
       })(),
     ).rejects.toBeInstanceOf(ProviderUnavailable);
+  });
+
+  it('sends the photo before the question, as one user turn', async () => {
+    const { opener, adapter } = adapterFor(HAPPY_PATH_EVENTS);
+
+    for await (const _ of adapter.generate({
+      policy: ProductPolicy.current(),
+      history: [],
+      question: 'What does this message on my screen mean?',
+      image: {
+        data: CONTRACT_IMAGE.data,
+        mediaType: 'image/jpeg',
+        width: 1568,
+        height: 1176,
+      },
+    })) {
+      void _;
+    }
+
+    // Image first: Anthropic's guidance is that a question read after the
+    // picture it is about produces better answers than the reverse, and it is
+    // the order the person composed it in.
+    expect(opener.requests[0]?.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/jpeg',
+              data: CONTRACT_IMAGE.data,
+            },
+          },
+          { type: 'text', text: 'What does this message on my screen mean?' },
+        ],
+      },
+    ]);
+  });
+
+  it('leaves a text-only turn exactly as it was before photos existed', async () => {
+    const { opener, adapter } = adapterFor(HAPPY_PATH_EVENTS);
+
+    for await (const _ of adapter.generate({
+      policy: ProductPolicy.current(),
+      history: [],
+      question: 'Is this a scam?',
+    })) {
+      void _;
+    }
+
+    // A plain string, not a one-element block array. Both are valid to the API;
+    // this is the one every turn sent before S4, and adding photos should have
+    // changed nothing about the requests that do not have one.
+    expect(opener.requests[0]?.messages).toEqual([
+      { role: 'user', content: 'Is this a scam?' },
+    ]);
+  });
+
+  it('sends earlier turns as text, with no image block anywhere in them', async () => {
+    const { opener, adapter } = adapterFor(HAPPY_PATH_EVENTS);
+
+    for await (const _ of adapter.generate({
+      policy: ProductPolicy.current(),
+      history: [
+        {
+          author: 'user',
+          text: '[The person sent a photo with this question. The photo is no longer available to you.]\n\nWhat is this?',
+        },
+        { author: 'assistant', text: 'It is a fake warning.' },
+      ],
+      question: 'What should I do about it?',
+      image: undefined,
+    })) {
+      void _;
+    }
+
+    // AC6 from this side: history has no bytes to resend, so the follow up
+    // costs what a text follow up costs.
+    const history = opener.requests[0]?.messages.slice(0, 2) ?? [];
+    for (const turn of history) {
+      expect(typeof turn.content).toBe('string');
+    }
+    expect(JSON.stringify(opener.requests[0])).not.toContain('base64');
   });
 
   it('keeps the typed SDK exception as the cause without exposing it upstream', async () => {

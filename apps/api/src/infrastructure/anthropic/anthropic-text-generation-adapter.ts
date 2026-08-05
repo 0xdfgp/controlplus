@@ -6,11 +6,8 @@ import type {
 } from '../../domain/ports/text-generation-port.ts';
 import { ModelId } from '../../domain/value-objects/model-id.ts';
 import { Usage } from '../../domain/value-objects/usage.ts';
-import type {
-  AnthropicEvent,
-  MessageStreamOpener,
-  MessageTurn,
-} from './message-stream.ts';
+import type { AnthropicEvent, MessageStreamOpener } from './message-stream.ts';
+import { toMessageTurns } from './to-message-turns.ts';
 
 export const ANTHROPIC_PROVIDER = 'anthropic';
 
@@ -23,25 +20,6 @@ interface PendingCompletion {
 }
 
 /**
- * The domain's turns in the provider's vocabulary, ending with the question.
- *
- * Translation and nothing else. Which messages are here, what order they are
- * in and how a stopped answer is marked were all settled in the domain before
- * this was called; the only judgement made here is that Anthropic calls the
- * assistant side "assistant".
- */
-function toMessageTurns(request: GenerationRequest): MessageTurn[] {
-  const turns = request.history.map(
-    (turn): MessageTurn => ({
-      role: turn.author === 'assistant' ? 'assistant' : 'user',
-      content: turn.text,
-    }),
-  );
-  turns.push({ role: 'user', content: request.question });
-  return turns;
-}
-
-/**
  * TextGenerationPort over the Anthropic Messages API (ADR-032).
  *
  * Normalises provider events into domain chunks here, so no provider type
@@ -51,6 +29,10 @@ function toMessageTurns(request: GenerationRequest): MessageTurn[] {
  * Only `text_delta` events become answer text. Thinking deltas and signature
  * deltas are not the answer and are dropped, not streamed to someone reading at
  * their own pace.
+ *
+ * A photo travelling with the question becomes a provider image block in
+ * to-message-turns.ts (ADR-024). Nothing about the response path changes: an
+ * answer about a picture streams back as the same text deltas.
  */
 export class AnthropicTextGenerationAdapter implements TextGenerationPort {
   constructor(

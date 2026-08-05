@@ -44,8 +44,17 @@ export interface UsagePayload {
   readonly thoughtTokens: number;
 }
 
-/** The domain error classes the stream is allowed to name. */
-export type StreamErrorClass = 'ProviderUnavailable' | 'ConversationNotFound';
+/**
+ * The domain error classes the stream is allowed to name.
+ *
+ * AttachmentTooLarge is the photo rule from ADR-024. The class travels, never
+ * the limit and never a byte count: the app turns it into one plain sentence,
+ * and a number of megabytes is a technical term to the person reading it.
+ */
+export type StreamErrorClass =
+  | 'ProviderUnavailable'
+  | 'ConversationNotFound'
+  | 'AttachmentTooLarge';
 
 export interface StageEvent {
   readonly type: 'stage';

@@ -21,7 +21,14 @@
       "usesCleartextTraffic": true
     },
     "plugins": [
-      "expo-dev-client"
+      "expo-dev-client",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Control+ needs to see your photos so you can show the assistant a picture of something you are worried about. Photos are only sent when you choose one and press Send.",
+          "cameraPermission": "Control+ needs the camera so you can photograph a message or a warning on your screen and ask the assistant about it. Photos are only sent when you press Send."
+        }
+      ]
     ]
   }
 }

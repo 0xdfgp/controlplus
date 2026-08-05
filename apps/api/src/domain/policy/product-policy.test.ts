@@ -81,6 +81,33 @@ describe('ProductPolicy, safety rules', () => {
     });
   });
 
+  describe('photos (S4, 03-senior-ux-principles)', () => {
+    it('requires the model to read the photo before answering', () => {
+      expect(prompt).toContain(
+        'When the person sends a photo, read what is in it before you answer.',
+      );
+    });
+
+    it('requires saying so plainly when the photo cannot be read, rather than guessing', () => {
+      // The failure mode this exists for is a confident wrong answer about a
+      // half-legible popup, which for this user costs money. Same argument as
+      // the scam check: not a property bought from the model, a rule with a
+      // test.
+      expect(prompt).toContain(
+        'If the photo is too blurry, too dark or too cut off to read, say so plainly and ask for another one. Do not guess what it says.',
+      );
+    });
+
+    it('gives the sentence to say and what would help', () => {
+      expect(prompt).toContain(
+        'Say something like: I cannot quite read that, could you take it again?',
+      );
+      expect(prompt).toContain(
+        'Tell them what would help, such as holding the phone steadier or getting the whole message in the picture.',
+      );
+    });
+  });
+
   describe('the voice rules that were already there', () => {
     it('keeps them', () => {
       // A regression guard on the rewrite, not new coverage: these were the
@@ -97,6 +124,6 @@ describe('ProductPolicy, safety rules', () => {
   });
 
   it('carries a version, so a stored answer is readable against what produced it', () => {
-    expect(ProductPolicy.current().version).toBe('2026-08-05.2');
+    expect(ProductPolicy.current().version).toBe('2026-08-05.3');
   });
 });

@@ -9,6 +9,7 @@ function turn(overrides: Partial<LoggedTurn> = {}): LoggedTurn {
     answer: 'Yes. Do not click the link.',
     state: 'idle',
     errorMessage: null,
+    photoUri: null,
     ...overrides,
   };
 }
@@ -49,6 +50,19 @@ describe('appendTurn', () => {
   it('refuses a turn that is still in flight', () => {
     expect(appendTurn([], turn({ state: 'thinking' }))).toEqual([]);
     expect(appendTurn([], turn({ state: 'responding' }))).toEqual([]);
+    // A photo still on its way out has not happened yet either.
+    expect(appendTurn([], turn({ state: 'uploading' }))).toEqual([]);
+  });
+
+  it('keeps the photo with the turn it was sent with', () => {
+    const [logged] = appendTurn(
+      [],
+      turn({ photoUri: 'file:///tmp/resized-photo.jpg' }),
+    );
+
+    // The server keeps no bytes (ADR-024), so this local file is the only copy
+    // and it is what puts the photo back above its answer in the conversation.
+    expect(logged?.photoUri).toBe('file:///tmp/resized-photo.jpg');
   });
 
   it('refuses a turn with no question, because nothing was asked', () => {

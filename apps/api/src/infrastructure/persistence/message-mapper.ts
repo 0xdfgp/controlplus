@@ -1,5 +1,7 @@
 import { TextPart } from '../../domain/content/text-part.ts';
+import { ImagePart } from '../../domain/content/image-part.ts';
 import type { ContentPart } from '../../domain/content/content-part.ts';
+import { isImagePart } from '../../domain/content/content-part.ts';
 import { Message } from '../../domain/entities/message.ts';
 import type { TerminalState } from '../../domain/entities/message.ts';
 import { ConversationId } from '../../domain/value-objects/conversation-id.ts';
@@ -13,6 +15,26 @@ interface StoredTextPart {
   readonly kind: 'text';
   readonly text: string;
 }
+
+/**
+ * A photo as it is stored: what it was, how big it was, and which one it was.
+ *
+ * There is no `data` field and there never will be one. ADR-024 decided the
+ * bytes are not persisted, so a row that carried them would be the decision
+ * quietly reversed. Adding this variant needed no migration: parts are already
+ * jsonb, so the shape changed and the DDL did not — which is exactly the case
+ * ADR-010's amendment records, where the mapper and its tests are the
+ * protection rather than a migration.
+ */
+interface StoredImagePart {
+  readonly kind: 'image';
+  readonly mediaType: string;
+  readonly width: number;
+  readonly height: number;
+  readonly hash: string;
+}
+
+type StoredPart = StoredTextPart | StoredImagePart;
 
 interface StoredProvenance {
   readonly origin: string;
@@ -38,9 +60,7 @@ export function toMessageRow(message: Message): NewMessageRow {
     id: message.id.value,
     conversationId: message.conversationId.value,
     author: message.author,
-    parts: message.parts.map(
-      (part): StoredTextPart => ({ kind: 'text', text: part.text }),
-    ),
+    parts: message.parts.map(toStoredPart),
     createdAt: message.createdAt,
     provenance:
       message.provenance === null
@@ -86,16 +106,48 @@ export function toMessage(row: MessageRow): Message {
   });
 }
 
+function toStoredPart(part: ContentPart): StoredPart {
+  if (isImagePart(part)) {
+    return {
+      kind: 'image',
+      mediaType: part.mediaType,
+      width: part.width,
+      height: part.height,
+      hash: part.hash,
+    };
+  }
+  return { kind: 'text', text: part.text };
+}
+
 function toContentParts(value: unknown): ContentPart[] {
   if (!Array.isArray(value)) {
     throw new TypeError('Stored content parts are not an array.');
   }
   return value.map((raw) => {
-    const part = raw as Partial<StoredTextPart>;
-    if (part.kind !== 'text' || typeof part.text !== 'string') {
-      throw new TypeError(`Unsupported stored content part: ${JSON.stringify(raw)}.`);
+    const part = raw as Partial<StoredImagePart> & Partial<StoredTextPart>;
+
+    if (part.kind === 'text' && typeof part.text === 'string') {
+      return TextPart.of(part.text);
     }
-    return TextPart.of(part.text);
+
+    // Straight back through the factory, so a row that has drifted out of
+    // shape fails here rather than becoming a part that references nothing.
+    if (
+      part.kind === 'image' &&
+      typeof part.mediaType === 'string' &&
+      typeof part.width === 'number' &&
+      typeof part.height === 'number' &&
+      typeof part.hash === 'string'
+    ) {
+      return ImagePart.of({
+        mediaType: part.mediaType,
+        width: part.width,
+        height: part.height,
+        hash: part.hash,
+      });
+    }
+
+    throw new TypeError(`Unsupported stored content part: ${JSON.stringify(raw)}.`);
   });
 }
 

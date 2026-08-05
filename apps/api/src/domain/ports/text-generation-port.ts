@@ -16,6 +16,25 @@ export interface GenerationTurn {
   readonly text: string;
 }
 
+/**
+ * A photo travelling with this turn's question.
+ *
+ * The bytes are here because ADR-024 sends them inline with the question and
+ * ADR-012 puts prompt assembly in the domain; a request crossing the port is
+ * what is being said now, not what is kept. Nothing holds this: the Message
+ * that outlives the turn carries an ImagePart, which has no bytes in it.
+ *
+ * Only the current question can carry one. History never does — the bytes are
+ * not persisted, so there are none to resend (ADR-024).
+ */
+export interface GenerationImage {
+  /** Base64, no `data:` prefix. */
+  readonly data: string;
+  readonly mediaType: string;
+  readonly width: number;
+  readonly height: number;
+}
+
 /** What the domain asks a generation provider for. One request per turn. */
 export interface GenerationRequest {
   readonly policy: ProductPolicy;
@@ -26,6 +45,14 @@ export interface GenerationRequest {
   readonly history: readonly GenerationTurn[];
   /** The user's question. */
   readonly question: string;
+  /**
+   * The photo sent with it, when there is one.
+   *
+   * Explicitly `| undefined` because the project runs
+   * exactOptionalPropertyTypes: a turn with no photo passes the field through
+   * as undefined rather than building a different object shape.
+   */
+  readonly image?: GenerationImage | undefined;
 }
 
 /**

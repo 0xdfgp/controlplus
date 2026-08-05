@@ -1,10 +1,25 @@
 import { redact } from './redact.ts';
 
+/**
+ * What the turn's photo was, if it had one (ADR-024).
+ *
+ * Media type and dimensions only. The bytes are never logged and neither is the
+ * hash: this exists so an operator reading a turn with an unusual input token
+ * count can see that a picture was in it, which is the one thing about the
+ * image that changes how the line reads.
+ */
+export interface TurnLogImage {
+  readonly mediaType: string;
+  readonly width: number;
+  readonly height: number;
+}
+
 export interface TurnLogFields {
   readonly conversationId: string;
   readonly requestId: string;
   readonly latencyMs: number;
   readonly question: string;
+  readonly image: TurnLogImage | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   /** Billed outside input and output (ADR-020), so logged separately. */
@@ -57,6 +72,7 @@ export class TurnLogger {
         thoughtTokens: fields.thoughtTokens,
         terminalState: fields.terminalState,
         errorClass: fields.errorClass,
+        image: fields.image,
         question: redact(fields.question),
       }),
     );

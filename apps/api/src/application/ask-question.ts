@@ -1,8 +1,8 @@
-import { TextPart } from '../domain/content/text-part.ts';
 import { Conversation } from '../domain/entities/conversation.ts';
 import { Message } from '../domain/entities/message.ts';
 import { GenerationFailed } from '../domain/events/generation-failed.ts';
 import type { MessageCompleted } from '../domain/events/message-completed.ts';
+import { assertWithinAttachmentLimit } from '../domain/policy/attachment-policy.ts';
 import { CONTEXT_WINDOW_MESSAGES } from '../domain/policy/conversation-context.ts';
 import type { Clock } from '../domain/ports/clock.ts';
 import type { ConversationRepository } from '../domain/ports/conversation-repository.ts';
@@ -13,10 +13,16 @@ import type {
   AnswerGenerationEvent,
 } from '../domain/services/answer-generation.ts';
 import type { ConversationId } from '../domain/value-objects/conversation-id.ts';
+import { toUserMessageParts } from './user-message.ts';
+import type { AskQuestionImage } from './user-message.ts';
+
+export type { AskQuestionImage } from './user-message.ts';
 
 export interface AskQuestionInput {
   readonly conversationId: ConversationId;
   readonly question: string;
+  /** Explicitly `| undefined`: the project runs exactOptionalPropertyTypes. */
+  readonly image?: AskQuestionImage | undefined;
 }
 
 export interface AskQuestionDelta {
@@ -64,6 +70,18 @@ export class AskQuestion {
   async *execute(
     input: AskQuestionInput,
   ): AsyncGenerator<AskQuestionEvent, void, undefined> {
+    // Before the conversation is touched, because a photo that cannot be sent
+    // is not a turn that happened. Nothing is written, no provider is called,
+    // and the user is told in one plain sentence (ADR-024).
+    if (input.image !== undefined) {
+      try {
+        assertWithinAttachmentLimit(input.image.byteSize);
+      } catch (caught) {
+        yield this.failure(input.conversationId, caught);
+        return;
+      }
+    }
+
     const conversation = await this.loadOrStart(input.conversationId);
 
     // Read before the question is written, so the history is the conversation
@@ -80,12 +98,7 @@ export class AskQuestion {
       // model a follow up with no idea what it is following, or saying so. A
       // silently context-free answer is the worse of the two: it reads as a
       // confident reply to a question nobody asked.
-      const error = caught instanceof Error ? caught : new Error(String(caught));
-      yield {
-        kind: 'failed',
-        error,
-        event: GenerationFailed.from(conversation.id, error, this.clock.now()),
-      };
+      yield this.failure(conversation.id, caught);
       return;
     }
 
@@ -95,7 +108,7 @@ export class AskQuestion {
       Message.fromUser({
         id: this.idGenerator.nextMessageId(),
         conversationId: conversation.id,
-        parts: [TextPart.of(input.question)],
+        parts: toUserMessageParts(input.question, input.image),
         createdAt: this.clock.now(),
       }),
     );
@@ -109,6 +122,7 @@ export class AskQuestion {
       conversation,
       history,
       input.question,
+      input.image,
     );
 
     try {
@@ -132,15 +146,28 @@ export class AskQuestion {
         };
       }
     } catch (caught) {
-      const error = caught instanceof Error ? caught : new Error(String(caught));
-      yield {
-        kind: 'failed',
-        error,
-        event: GenerationFailed.from(conversation.id, error, this.clock.now()),
-      };
+      yield this.failure(conversation.id, caught);
     } finally {
       await this.writeStoppedTurn(generation);
     }
+  }
+
+  /**
+   * A turn that could not happen, said once and the same way every time.
+   *
+   * The error class travels; the provider's own words never do. Whatever the
+   * user reads is chosen by the app from the class alone (ADR-016).
+   */
+  private failure(
+    conversationId: ConversationId,
+    caught: unknown,
+  ): AskQuestionFailed {
+    const error = caught instanceof Error ? caught : new Error(String(caught));
+    return {
+      kind: 'failed',
+      error,
+      event: GenerationFailed.from(conversationId, error, this.clock.now()),
+    };
   }
 
   /**

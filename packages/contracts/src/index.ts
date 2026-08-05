@@ -1,5 +1,12 @@
-export type { AskQuestionRequest } from './request.ts';
-export { isAskQuestionRequest } from './request.ts';
+export type {
+  AskQuestionRequest,
+  ImageMediaType,
+  ImagePayload,
+} from './request.ts';
+export {
+  isAskQuestionRequest,
+  SUPPORTED_IMAGE_MEDIA_TYPES,
+} from './request.ts';
 
 export type {
   MessageDeltaEvent,

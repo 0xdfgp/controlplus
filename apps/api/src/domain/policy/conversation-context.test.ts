@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ImagePart } from '../content/image-part.ts';
 import { TextPart } from '../content/text-part.ts';
 import { Message } from '../entities/message.ts';
 import type { TerminalState } from '../entities/message.ts';
@@ -10,6 +11,7 @@ import { Provenance } from '../value-objects/provenance.ts';
 import { Usage } from '../value-objects/usage.ts';
 import {
   CONTEXT_WINDOW_MESSAGES,
+  PHOTO_IN_HISTORY_NOTICE,
   STOPPED_ANSWER_NOTICE,
   toGenerationTurns,
 } from './conversation-context.ts';
@@ -29,6 +31,24 @@ function fromUser(text: string): Message {
     id: nextId(),
     conversationId,
     parts: [TextPart.of(text)],
+    createdAt,
+  });
+}
+
+function photo(): ImagePart {
+  return ImagePart.of({
+    mediaType: 'image/jpeg',
+    width: 1568,
+    height: 1176,
+    hash: 'a3f1b2c4d5e6',
+  });
+}
+
+function fromUserWithPhoto(text: string): Message {
+  return Message.fromUser({
+    id: nextId(),
+    conversationId,
+    parts: text.length > 0 ? [photo(), TextPart.of(text)] : [photo()],
     createdAt,
   });
 }
@@ -109,5 +129,52 @@ describe('toGenerationTurns', () => {
 
   it('renders nothing for a conversation that has not started', () => {
     expect(toGenerationTurns([])).toEqual([]);
+  });
+});
+
+describe('an earlier photo in the window (ADR-023, ADR-024)', () => {
+  it('sends no image bytes, because there are none to send', () => {
+    const turns = toGenerationTurns([
+      fromUserWithPhoto('What does this message on my screen mean?'),
+      fromAssistant('It is a fake warning. Do not tap it.', 'completed'),
+    ]);
+
+    // The follow up costs what a text follow up costs. This is what ADR-023
+    // meant by attachments in history being references rather than bytes, and
+    // it is true here because the bytes were never stored at all.
+    const everything = JSON.stringify(turns);
+    expect(everything).not.toContain('base64');
+    expect(everything).not.toContain('data');
+    expect(everything).not.toContain('image/jpeg');
+  });
+
+  it('says a photo was there, rather than leaving a gap', () => {
+    const turns = toGenerationTurns([
+      fromUserWithPhoto('What does this message on my screen mean?'),
+    ]);
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.text).toBe(
+      `${PHOTO_IN_HISTORY_NOTICE}\n\nWhat does this message on my screen mean?`,
+    );
+  });
+
+  it('keeps a photo-only turn instead of dropping it', () => {
+    // The failure this guards against: an image-only message renders to no
+    // text, so without the notice it would vanish from the window entirely and
+    // "what should I do about it?" would become a question about nothing.
+    const turns = toGenerationTurns([
+      fromUserWithPhoto(''),
+      fromAssistant('That is a scam.', 'completed'),
+      fromUser('What should I do about it?'),
+    ]);
+
+    expect(turns.map((t) => t.author)).toEqual(['user', 'assistant', 'user']);
+    expect(turns[0]?.text).toBe(PHOTO_IN_HISTORY_NOTICE);
+  });
+
+  it('tells the model the photo is gone rather than implying it can still see it', () => {
+    // A model told there is an image it cannot find will describe one anyway.
+    expect(PHOTO_IN_HISTORY_NOTICE).toContain('no longer available');
   });
 });

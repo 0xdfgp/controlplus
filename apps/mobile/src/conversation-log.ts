@@ -15,6 +15,14 @@ export interface LoggedTurn {
   /** How the turn ended. 'idle' is the machine's word for finished normally. */
   readonly state: TurnState;
   readonly errorMessage: string | null;
+  /**
+   * The photo that was sent with it, if there was one.
+   *
+   * A local file on the phone. The server keeps no bytes (ADR-024), so this is
+   * the only copy anywhere and it lives as long as the app is open, which is
+   * the same life the rest of this log has.
+   */
+  readonly photoUri: string | null;
 }
 
 /**

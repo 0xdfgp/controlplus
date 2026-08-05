@@ -2,9 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { appendTurn } from './conversation-log.ts';
 import type { LoggedTurn } from './conversation-log.ts';
+import { FAILURE_SENTENCE, sentenceFor } from './failure-sentences.ts';
 import { askQuestionStream } from './streaming/ask-question-stream.ts';
 import { transition } from './turn-machine.ts';
 import type { TurnEvent, TurnState } from './turn-machine.ts';
+import { useAnswerBuffer } from './use-answer-buffer.ts';
+import { toImagePayload } from './use-photo.ts';
+import type { Photo } from './use-photo.ts';
 
 export interface Turn {
   /** Finished turns, oldest first. The live turn is not in here. */
@@ -13,38 +17,29 @@ export interface Turn {
   readonly question: string;
   readonly answer: string;
   readonly errorMessage: string | null;
-  ask: (question: string) => void;
+  /** The photo sent with the live turn, for the screen to show. */
+  readonly photoUri: string | null;
+  /**
+   * How much of the photo has left the phone, 0 to 1, or null when nothing is
+   * measuring it. Null rather than 0: "none yet" and "nobody is telling us"
+   * are different, and only one of them is honest to draw as a bar.
+   */
+  readonly progress: number | null;
+  ask: (question: string, photo?: Photo | null) => void;
   stop: () => void;
 }
-
-/**
- * How often buffered answer text is flushed to React state (ADR-022).
- *
- * Deltas arrive faster than anyone reads. Re-rendering per token would burn
- * frames on a screen whose whole job is to be calm, so text accumulates in a ref
- * and lands on this interval instead. 80ms is a guess and ADR-022 says so.
- */
-const FLUSH_INTERVAL_MS = 80;
-
-/**
- * The one sentence shown when a turn fails.
- *
- * Plain language, no error code, no provider name. Someone who has just been
- * frightened by a scam message should not then be handed a stack trace.
- */
-const FAILURE_SENTENCE =
-  'Something went wrong on our side. Your question was not answered. Please try again in a moment.';
 
 export function useTurn(baseUrl: string, conversationId: string): Turn {
   const [history, setHistory] = useState<readonly LoggedTurn[]>([]);
   const [state, setState] = useState<TurnState>('idle');
   const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
 
-  const buffer = useRef('');
+  const buffer = useAnswerBuffer();
   const asked = useRef('');
-  const flushTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sentPhoto = useRef<string | null>(null);
   const cancel = useRef<(() => void) | null>(null);
 
   /**
@@ -74,14 +69,6 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
     return true;
   }, []);
 
-  const stopFlushing = useCallback(() => {
-    if (flushTimer.current !== null) {
-      clearInterval(flushTimer.current);
-      flushTimer.current = null;
-    }
-    setAnswer(buffer.current);
-  }, []);
-
   /**
    * Ends the turn and moves it into the conversation.
    *
@@ -94,61 +81,65 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
       if (!apply(event)) {
         return;
       }
-      stopFlushing();
+      buffer.stop();
       const finished: LoggedTurn = {
         question: asked.current,
-        answer: buffer.current,
+        answer: buffer.current(),
         state: current.current,
         errorMessage: failure,
+        photoUri: sentPhoto.current,
       };
       setHistory((log) => appendTurn(log, finished));
-      buffer.current = '';
       asked.current = '';
+      sentPhoto.current = null;
+      buffer.clear();
       setQuestion('');
-      setAnswer('');
+      setPhotoUri(null);
+      setProgress(null);
       setErrorMessage(null);
     },
-    [apply, stopFlushing],
+    [apply, buffer],
   );
 
-  useEffect(
-    () => () => {
-      cancel.current?.();
-      if (flushTimer.current !== null) {
-        clearInterval(flushTimer.current);
-      }
-    },
-    [],
-  );
+  useEffect(() => () => cancel.current?.(), []);
 
   const ask = useCallback(
-    (question_: string) => {
+    (question_: string, photo?: Photo | null) => {
       const trimmed = question_.trim();
       if (trimmed.length === 0) {
         return;
       }
 
-      // A question arriving over a live answer. The machine refuses it, so no
-      // request goes out either.
-      if (!apply('ask')) {
+      // A photo goes through the uploading state, a bare question does not:
+      // there is nothing to show progress on for one line of text, and a
+      // progress bar that finishes instantly is noise (E5).
+      if (!apply(photo ? 'upload' : 'ask')) {
         return;
       }
 
       cancel.current?.();
-      buffer.current = '';
       asked.current = trimmed;
+      sentPhoto.current = photo?.uri ?? null;
       setQuestion(trimmed);
-      setAnswer('');
+      setPhotoUri(photo?.uri ?? null);
+      setProgress(null);
       setErrorMessage(null);
-
-      flushTimer.current = setInterval(() => {
-        setAnswer(buffer.current);
-      }, FLUSH_INTERVAL_MS);
+      buffer.start();
 
       cancel.current = askQuestionStream(
-        { baseUrl, conversationId, question: trimmed },
+        { baseUrl, conversationId, question: trimmed, image: toImagePayload(photo) },
         {
+          // The percentage, and only that. What ends the uploading state is the
+          // server's first event, below: one signal, not two racing.
+          onUploadProgress: setProgress,
           onEvent: (event) => {
+            // The server speaking at all proves the photo arrived, and it is
+            // the only thing that proves it: upload progress is optional and
+            // React Native emits no upload-finished event. Hanging the turn off
+            // it left a completed answer unable to reach a screen frozen on
+            // "Sending your photo". A no-op once the turn has moved on.
+            apply('sent');
+
             switch (event.type) {
               case 'stage':
                 if (event.stage === 'responding') {
@@ -156,24 +147,24 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
                 }
                 return;
               case 'message.delta':
-                buffer.current += event.text;
+                buffer.append(event.text);
                 return;
               case 'message.done':
                 settle('completed', null);
                 return;
               case 'error':
-                settle('fail', FAILURE_SENTENCE);
+                settle('fail', sentenceFor(event.error));
                 return;
             }
           },
           onTransportError: () => {
             settle('fail', FAILURE_SENTENCE);
           },
-          onClose: stopFlushing,
+          onClose: buffer.stop,
         },
       );
     },
-    [apply, baseUrl, conversationId, settle, stopFlushing],
+    [apply, baseUrl, buffer, conversationId, settle],
   );
 
   /**
@@ -193,5 +184,15 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
     settle('stop', null);
   }, [settle]);
 
-  return { history, state, question, answer, errorMessage, ask, stop };
+  return {
+    history,
+    state,
+    question,
+    answer: buffer.answer,
+    errorMessage,
+    photoUri,
+    progress,
+    ask,
+    stop,
+  };
 }

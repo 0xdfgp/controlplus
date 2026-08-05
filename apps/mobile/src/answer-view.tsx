@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet, Text, View } from 'react-native';
 
 import { theme } from './theme.ts';
 import type { TurnState } from './turn-machine.ts';
@@ -32,6 +32,8 @@ export interface AnswerViewProps {
    * time anything on the screen changed, which is worse than silence.
    */
   readonly live: boolean;
+  /** The photo that went with the question, if there was one. */
+  readonly photoUri?: string | null;
 }
 
 /**
@@ -52,6 +54,7 @@ export function AnswerView({
   answer,
   errorMessage,
   live,
+  photoUri = null,
 }: AnswerViewProps): React.JSX.Element {
   const failed = errorMessage !== null && state === 'failed';
   const waiting = state === 'responding' && answer.length === 0 && !failed;
@@ -70,6 +73,17 @@ export function AnswerView({
           {STOPPED_LABEL}
         </Text>
       ) : null}
+
+      {photoUri === null ? null : (
+        <Image
+          source={{ uri: photoUri }}
+          style={styles.photo}
+          resizeMode="contain"
+          // Above the question and the answer, in the order it happened: the
+          // photo went first. A screen reader walks the same path an eye does.
+          accessibilityLabel="The photo you sent with this question"
+        />
+      )}
 
       <Text style={styles.question}>You asked: “{question}”</Text>
 
@@ -106,6 +120,13 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     paddingHorizontal: theme.spacing(1.5),
     paddingVertical: theme.spacing(0.5),
+    marginBottom: theme.spacing(2),
+  },
+  photo: {
+    width: '100%',
+    height: 220,
+    borderRadius: 14,
+    backgroundColor: '#E4E6F6',
     marginBottom: theme.spacing(2),
   },
   question: {

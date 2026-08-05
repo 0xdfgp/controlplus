@@ -4,6 +4,8 @@ import {
   deleteConversation,
   openTestDatabase,
 } from '../../../test/support/test-database.ts';
+import { isImagePart } from '../../domain/content/content-part.ts';
+import { ImagePart } from '../../domain/content/image-part.ts';
 import { TextPart } from '../../domain/content/text-part.ts';
 import { Conversation } from '../../domain/entities/conversation.ts';
 import { Message } from '../../domain/entities/message.ts';
@@ -201,6 +203,87 @@ describe('DrizzleMessageRepository', () => {
 
     expect(restored?.parts).toHaveLength(2);
     expect(restored?.text()).toBe('first second');
+  });
+
+  it('round trips a photo through jsonb, with no bytes in the row (AC3)', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    const base64 = 'LzlqLzRBQVFTa1pKUmdBQkFRQUFBUUFCQUFELw==';
+    await messages.save(
+      Message.fromUser({
+        id: MessageId.fromString(`test-msg-img-${counter}`),
+        conversationId,
+        parts: [
+          ImagePart.of({
+            mediaType: 'image/jpeg',
+            width: 1568,
+            height: 1176,
+            hash: 'a3f1b2c4d5e6f70819',
+          }),
+          TextPart.of('What does this message on my screen mean?'),
+        ],
+        createdAt,
+      }),
+    );
+
+    const [restored] = await messages.findByConversation(conversationId);
+
+    expect(restored?.parts).toHaveLength(2);
+    const image = restored?.parts[0];
+    if (image === undefined || !isImagePart(image)) {
+      throw new Error('expected an image part first');
+    }
+    expect(image.mediaType).toBe('image/jpeg');
+    expect(image.width).toBe(1568);
+    expect(image.height).toBe(1176);
+    expect(image.hash).toBe('a3f1b2c4d5e6f70819');
+    expect(restored?.text()).toBe('What does this message on my screen mean?');
+
+    // The column itself, not the mapped object. ADR-024 says the bytes are not
+    // persisted, and this is the assertion that stays true only while that
+    // holds: no migration protects a jsonb payload shape, so this test is the
+    // protection (ADR-010's amendment).
+    const row = await database.pool.query<{ parts: unknown }>(
+      'SELECT parts FROM messages WHERE conversation_id = $1',
+      [conversationId.value],
+    );
+    const stored = JSON.stringify(row.rows[0]?.parts);
+    expect(stored).not.toContain(base64);
+    expect(stored).not.toContain('data');
+    expect(row.rows[0]?.parts).toEqual([
+      {
+        kind: 'image',
+        mediaType: 'image/jpeg',
+        width: 1568,
+        height: 1176,
+        hash: 'a3f1b2c4d5e6f70819',
+      },
+      { kind: 'text', text: 'What does this message on my screen mean?' },
+    ]);
+  });
+
+  it('refuses a stored image part that has drifted out of shape', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    // Rehydration goes through the same factory as a fresh part, so a row
+    // missing its hash fails here rather than becoming a reference to nothing.
+    await database.pool.query(
+      `INSERT INTO messages (id, conversation_id, author, parts, created_at, provenance, usage, state)
+       VALUES ($1, $2, 'user', $3::jsonb, now(), NULL, NULL, NULL)`,
+      [
+        `test-msg-img-bad-${counter}`,
+        conversationId.value,
+        JSON.stringify([
+          { kind: 'image', mediaType: 'image/jpeg', width: 1568, height: 1176 },
+        ]),
+      ],
+    );
+
+    await expect(messages.findByConversation(conversationId)).rejects.toThrow(
+      /Unsupported stored content part/,
+    );
   });
 
   it('returns messages oldest first', async () => {

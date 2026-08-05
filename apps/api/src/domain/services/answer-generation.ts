@@ -11,6 +11,7 @@ import type { Clock } from '../ports/clock.ts';
 import type { IdGenerator } from '../ports/id-generator.ts';
 import type {
   CompletionChunk,
+  GenerationImage,
   TextGenerationPort,
 } from '../ports/text-generation-port.ts';
 import { Provenance } from '../value-objects/provenance.ts';
@@ -65,11 +66,15 @@ export class AnswerGeneration {
   /**
    * @param history Earlier messages, oldest first, already bounded by the
    *   context window. It does not contain `question`.
+   * @param image The photo sent with this question, if there is one. It travels
+   *   with this turn only: earlier photos are not in `history` because their
+   *   bytes were never stored (ADR-024).
    */
   async *run(
     conversation: Conversation,
     history: readonly Message[],
     question: string,
+    image?: GenerationImage,
   ): AsyncGenerator<AnswerGenerationEvent, void, undefined> {
     let answer = '';
     let provenance: Provenance | null = null;
@@ -83,6 +88,7 @@ export class AnswerGeneration {
         policy: this.policy,
         history: toGenerationTurns(history),
         question,
+        image,
       })) {
         if (chunk.kind === 'started') {
           provenance = Provenance.aiGenerated(chunk.modelId, chunk.provider);
