@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { isInFlight, transition } from './turn-machine.ts';
+import { isInFlight, isVoiceTurn, transition } from './turn-machine.ts';
 import type { TurnEvent, TurnState } from './turn-machine.ts';
 
 const STATES: readonly TurnState[] = [
   'idle',
+  'recording',
+  'transcribing',
+  'reviewing',
   'uploading',
   'thinking',
   'responding',
@@ -14,6 +17,10 @@ const STATES: readonly TurnState[] = [
 
 const EVENTS: readonly TurnEvent[] = [
   'ask',
+  'speak',
+  'transcribe',
+  'transcribed',
+  'discard',
   'upload',
   'sent',
   'responding',
@@ -26,6 +33,13 @@ const EVENTS: readonly TurnEvent[] = [
 const LEGAL: readonly [TurnState, TurnEvent, TurnState][] = [
   ['idle', 'ask', 'thinking'],
   ['idle', 'upload', 'uploading'],
+  ['idle', 'speak', 'recording'],
+  ['recording', 'transcribe', 'transcribing'],
+  ['recording', 'discard', 'idle'],
+  ['transcribing', 'transcribed', 'reviewing'],
+  ['transcribing', 'discard', 'idle'],
+  ['reviewing', 'ask', 'thinking'],
+  ['reviewing', 'discard', 'idle'],
   ['uploading', 'sent', 'thinking'],
   ['uploading', 'fail', 'failed'],
   ['thinking', 'responding', 'responding'],
@@ -36,8 +50,10 @@ const LEGAL: readonly [TurnState, TurnEvent, TurnState][] = [
   ['responding', 'fail', 'failed'],
   ['stopped', 'ask', 'thinking'],
   ['stopped', 'upload', 'uploading'],
+  ['stopped', 'speak', 'recording'],
   ['failed', 'ask', 'thinking'],
   ['failed', 'upload', 'uploading'],
+  ['failed', 'speak', 'recording'],
 ];
 
 describe('the turn state machine, legal transitions', () => {
@@ -148,14 +164,94 @@ describe('sending a photo (E5)', () => {
   });
 });
 
+describe('asking by speaking (E4, E6)', () => {
+  it('starts recording on an explicit event and nothing else', () => {
+    // 03 forbids press and hold, and the machine agrees rather than leaving it
+    // to the button: there is one event that starts recording, and it is the
+    // one a deliberate tap sends.
+    expect(transition('idle', 'speak')).toBe('recording');
+    expect(transition('recording', 'speak')).toBeNull();
+  });
+
+  it('goes recording, transcribing, reviewing, and only then thinking', () => {
+    expect(transition('recording', 'transcribe')).toBe('transcribing');
+    expect(transition('transcribing', 'transcribed')).toBe('reviewing');
+    expect(transition('reviewing', 'ask')).toBe('thinking');
+  });
+
+  it('sends nothing before the transcript has been seen (AC2)', () => {
+    // The whole point of E6. A voice turn cannot reach the server from
+    // recording or transcribing, so a misheard word is always on screen and
+    // correctable before anything is answered.
+    expect(transition('recording', 'ask')).toBeNull();
+    expect(transition('transcribing', 'ask')).toBeNull();
+  });
+
+  it('leaves a voice turn that produced nothing back at idle (AC4, AC5)', () => {
+    // A refused microphone and a recording that heard nothing both end here.
+    // Not in `failed`: nothing failed, and the person can still type.
+    expect(transition('recording', 'discard')).toBe('idle');
+    expect(transition('transcribing', 'discard')).toBe('idle');
+    expect(transition('reviewing', 'discard')).toBe('idle');
+  });
+
+  it('never turns a voice problem into a failed answer', () => {
+    for (const state of ['recording', 'transcribing', 'reviewing'] as const) {
+      expect(transition(state, 'fail')).toBeNull();
+    }
+  });
+
+  it('offers no Stop while speaking, because there is nothing to stop', () => {
+    // Stop aborts a request at the provider (ADR-016). Nothing has been sent
+    // yet; the control that ends a recording is a different one.
+    for (const state of ['recording', 'transcribing', 'reviewing'] as const) {
+      expect(transition(state, 'stop')).toBeNull();
+    }
+  });
+
+  it('lets a spoken question follow a finished, stopped or failed turn', () => {
+    for (const terminal of ['idle', 'stopped', 'failed'] as const) {
+      expect(transition(terminal, 'speak')).toBe('recording');
+    }
+  });
+
+  it('cannot report a transcript when nothing was being transcribed', () => {
+    expect(transition('idle', 'transcribed')).toBeNull();
+    expect(transition('recording', 'transcribed')).toBeNull();
+    expect(transition('thinking', 'transcribe')).toBeNull();
+  });
+
+  it('attaches no photo to a spoken question', () => {
+    // E1 offers both, but a turn is one or the other: the transcript review
+    // has no photo on it, and nothing in this slice sends both.
+    expect(transition('reviewing', 'upload')).toBeNull();
+    expect(transition('recording', 'upload')).toBeNull();
+  });
+});
+
 describe('isInFlight', () => {
   it('is true exactly while a turn is under way', () => {
     // Uploading counts: the input must not accept a second question while a
-    // photo is still leaving the phone.
+    // photo is still leaving the phone. The three voice states count too —
+    // the screen is showing one thing at a time, and while the person is
+    // speaking there is no composer to type a second question into.
     expect(STATES.filter(isInFlight)).toEqual([
+      'recording',
+      'transcribing',
+      'reviewing',
       'uploading',
       'thinking',
       'responding',
+    ]);
+  });
+});
+
+describe('isVoiceTurn', () => {
+  it('is true exactly for the three client-only voice states', () => {
+    expect(STATES.filter(isVoiceTurn)).toEqual([
+      'recording',
+      'transcribing',
+      'reviewing',
     ]);
   });
 });

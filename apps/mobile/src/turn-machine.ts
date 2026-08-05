@@ -9,6 +9,9 @@
  */
 export type TurnState =
   | 'idle'
+  | 'recording'
+  | 'transcribing'
+  | 'reviewing'
   | 'uploading'
   | 'thinking'
   | 'responding'
@@ -24,9 +27,19 @@ export type TurnState =
  * `upload` is asking with a photo attached, and `sent` is the last byte of it
  * leaving the phone. Both are client-only: no server event drives them, because
  * the server has not seen the request yet.
+ *
+ * `speak`, `transcribe`, `transcribed` and `discard` are client-only for a
+ * stronger reason: ADR-018 put transcription on the device, so no part of a
+ * voice turn exists on the server until the finished text is sent as an
+ * ordinary question. `discard` is how a voice turn that produced nothing
+ * usable ends — the person read a sentence and can start again.
  */
 export type TurnEvent =
   | 'ask'
+  | 'speak'
+  | 'transcribe'
+  | 'transcribed'
+  | 'discard'
   | 'upload'
   | 'sent'
   | 'responding'
@@ -37,6 +50,7 @@ export type TurnEvent =
 const READY: Partial<Record<TurnEvent, TurnState>> = {
   ask: 'thinking',
   upload: 'uploading',
+  speak: 'recording',
 };
 
 const TRANSITIONS: Record<TurnState, Partial<Record<TurnEvent, TurnState>>> = {
@@ -44,6 +58,22 @@ const TRANSITIONS: Record<TurnState, Partial<Record<TurnEvent, TurnState>>> = {
   // asking again is the only thing that moves it. That implicit return is
   // ADR-022; without it the app answers one question per launch.
   idle: READY,
+  // The three voice states, all client-only (ADR-018 via ADR-022). The audio
+  // never leaves the phone, so nothing on the server knows any of this is
+  // happening; what eventually reaches it is `ask` with text, indistinguishable
+  // from a typed question.
+  //
+  // None of them can fail. A refused microphone, a phone with no on-device
+  // model, or a recording that heard nothing all leave by `discard`, back to
+  // idle with a sentence to read. `failed` means the answer failed, and none of
+  // these is that — the person can still type, which every one of those
+  // sentences says.
+  recording: { transcribe: 'transcribing', discard: 'idle' },
+  transcribing: { transcribed: 'reviewing', discard: 'idle' },
+  // The transcript is on screen and editable, and nothing has been sent. The
+  // only two ways out are sending it, which is an ordinary question from here
+  // on, and throwing it away.
+  reviewing: { ask: 'thinking', discard: 'idle' },
   // A photo can take real time to leave the phone on a slow connection, and a
   // screen with no sign of progress reads as broken (E5). ADR-022 filed this
   // state under S5, before ADR-018 removed audio upload from the product
@@ -80,9 +110,28 @@ export function transition(
   return TRANSITIONS[state][event] ?? null;
 }
 
-/** Whether a turn is under way, and so cannot accept a question. */
+/**
+ * Whether a turn is under way, and so cannot accept a question.
+ *
+ * The three voice states count. Not because the server is busy — it has not
+ * been told anything yet — but because the screen is showing the person one
+ * thing at a time: while they are speaking or checking what was written down,
+ * the composer is not on screen to type a second question into.
+ */
 export function isInFlight(state: TurnState): boolean {
   return (
-    state === 'uploading' || state === 'thinking' || state === 'responding'
+    state === 'recording' ||
+    state === 'transcribing' ||
+    state === 'reviewing' ||
+    state === 'uploading' ||
+    state === 'thinking' ||
+    state === 'responding'
+  );
+}
+
+/** Whether the screen is in the middle of a spoken question. */
+export function isVoiceTurn(state: TurnState): boolean {
+  return (
+    state === 'recording' || state === 'transcribing' || state === 'reviewing'
   );
 }

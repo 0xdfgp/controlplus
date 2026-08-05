@@ -7,6 +7,7 @@ import { askQuestionStream } from './streaming/ask-question-stream.ts';
 import { transition } from './turn-machine.ts';
 import type { TurnEvent, TurnState } from './turn-machine.ts';
 import { useAnswerBuffer } from './use-answer-buffer.ts';
+import { useTurnState } from './use-turn-state.ts';
 import { toImagePayload } from './use-photo.ts';
 import type { Photo } from './use-photo.ts';
 
@@ -27,11 +28,22 @@ export interface Turn {
   readonly progress: number | null;
   ask: (question: string, photo?: Photo | null) => void;
   stop: () => void;
+  /** The person tapped "Speak instead". */
+  speak: () => void;
+  /** They tapped "I'm done", so the recogniser is being asked for the words. */
+  transcribe: () => void;
+  /** The words arrived and are on screen to be checked before anything is sent. */
+  transcribed: () => void;
+  /**
+   * The spoken question came to nothing: a refused microphone, a phone that
+   * cannot transcribe, or a recording that heard nothing. Back to idle with a
+   * sentence to read, never to `failed`.
+   */
+  discard: () => void;
 }
 
 export function useTurn(baseUrl: string, conversationId: string): Turn {
   const [history, setHistory] = useState<readonly LoggedTurn[]>([]);
-  const [state, setState] = useState<TurnState>('idle');
   const [question, setQuestion] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
@@ -42,32 +54,8 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
   const sentPhoto = useRef<string | null>(null);
   const cancel = useRef<(() => void) | null>(null);
 
-  /**
-   * The machine's state, readable without waiting for a render. The stream's
-   * callbacks and the Stop handler both decide what a turn does next, and a
-   * state read from a closure is the state as it was when that closure was made.
-   */
-  const current = useRef<TurnState>('idle');
-
-  /**
-   * The only way this hook changes state, and it reports whether the machine
-   * accepted the event.
-   *
-   * An event the machine refuses leaves the screen exactly where it was. That
-   * matters most after a stop: closing the connection produces a transport
-   * error a moment later, and the machine is what stops it repainting a
-   * deliberately stopped answer as a failure — and, now, what stops the same
-   * turn being written into the conversation twice.
-   */
-  const apply = useCallback((event: TurnEvent): boolean => {
-    const next = transition(current.current, event);
-    if (next === null) {
-      return false;
-    }
-    current.current = next;
-    setState(next);
-    return true;
-  }, []);
+  /** The machine, and the only way this hook changes state. */
+  const { state, now, apply } = useTurnState();
 
   /**
    * Ends the turn and moves it into the conversation.
@@ -85,7 +73,7 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
       const finished: LoggedTurn = {
         question: asked.current,
         answer: buffer.current(),
-        state: current.current,
+        state: now(),
         errorMessage: failure,
         photoUri: sentPhoto.current,
       };
@@ -98,7 +86,7 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
       setProgress(null);
       setErrorMessage(null);
     },
-    [apply, buffer],
+    [apply, buffer, now],
   );
 
   useEffect(() => () => cancel.current?.(), []);
@@ -176,13 +164,23 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
    * on screen stay exactly where they are.
    */
   const stop = useCallback(() => {
-    if (transition(current.current, 'stop') === null) {
+    if (transition(now(), 'stop') === null) {
       return;
     }
     cancel.current?.();
     cancel.current = null;
     settle('stop', null);
-  }, [settle]);
+  }, [now, settle]);
+
+  // The four voice transitions (ADR-018, ADR-022). Each is one event and
+  // nothing else: no request, nothing logged, no answer touched. A spoken
+  // question exists only on the phone until `ask` makes it an ordinary turn.
+  const move = useCallback(
+    (event: TurnEvent) => () => {
+      apply(event);
+    },
+    [apply],
+  );
 
   return {
     history,
@@ -194,5 +192,9 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
     progress,
     ask,
     stop,
+    speak: move('speak'),
+    transcribe: move('transcribe'),
+    transcribed: move('transcribed'),
+    discard: move('discard'),
   };
 }

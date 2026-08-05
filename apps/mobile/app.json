@@ -28,6 +28,13 @@
           "photosPermission": "Control+ needs to see your photos so you can show the assistant a picture of something you are worried about. Photos are only sent when you choose one and press Send.",
           "cameraPermission": "Control+ needs the camera so you can photograph a message or a warning on your screen and ask the assistant about it. Photos are only sent when you press Send."
         }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Control+ needs the microphone so you can ask your question out loud instead of typing it. Your recording stays on this phone and is never sent anywhere.",
+          "speechRecognitionPermission": "Control+ turns what you say into writing on this phone, so you can check it and correct it before anything is sent. Your voice is never sent anywhere."
+        }
       ]
     ]
   }
