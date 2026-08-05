@@ -502,6 +502,14 @@ weakest part of this decision, not because it is settled beyond argument.
 
 Roughly 70 minutes against the 3h provider adapters line.
 
+Amended during S2: GenerationChunk gains a StartedChunk carrying modelId and
+provider, yielded by the adapter as soon as the provider stream opens.
+Provenance was only available on the completion chunk, which never arrives on
+a cancelled stream, so a stopped Message could not be constructed. The
+alternative was injecting model and provider into AnswerGeneration from the
+composition root, which would put knowledge of the wired provider inside the
+domain and would be wrong the moment fallback selects a different one.
+
 Revisit when
 A third capability appears that neither port covers, which realtime
 voice-to-voice will be, or the AnswerGeneration service turns out to need
@@ -1078,6 +1086,390 @@ The matched-sample experiment shows minimal degrades scam handling in a way
 the policy rule does not recover, or D18 selects a model whose reasoning
 behaviour differs.
 
+### ADR-022: Explicit turn state machine, buffered rendering, implicit return to idle
+Date: 2026-08-05
+Status: accepted
+
+Context
+D16, deferred to S2 by ADR-007. S1 also surfaced something the brief had not
+foreseen: the text input renders only in the idle state and there is no path
+back, so the app answers one question per launch. With Stop arriving in S2
+that becomes a dead end.
+
+Decision
+A state machine in a client hook with idle, thinking, responding, stopped
+and failed. The screen reads the machine; no ad hoc booleans, because
+impossible states are what confuse this user.
+
+Streamed text accumulates in a ref and flushes to state on an interval of
+roughly 80ms, so the tree does not re-render per token.
+
+After any terminal state the screen returns to idle implicitly: the answer
+stays visible, the text input reappears below it, no explicit action. E7
+already draws this for the stopped case. An explicit "ask another question"
+control was rejected because 03 asks for one primary action per screen and
+the input already is it.
+
+Consequences
+Recording, uploading and transcribing join the machine in S5 as client-only
+states, since ADR-018 removed them from the server.
+
+One answer is visible at a time. History across turns is S3; this decision
+does not create it.
+
+The 80ms interval is a guess, not a measurement. If it reads as choppy on a
+low-end device, it moves.
+
+Revisit when
+A state turns out to be reachable from two places with different meanings,
+which would mean the machine is modelling the screen rather than the turn.
+
+### ADR-023: Context window bounded by message count, no summarisation
+Date: 2026-08-05
+Status: accepted
+
+Context
+D8. A follow up needs history on every turn, and history grows. The bound
+had to be a count of something, and the candidates were messages or tokens.
+
+Decision
+The last N messages, complete, in order, with N a named constant in the
+domain. No summarisation.
+
+Token counting was rejected: counting tokens before sending needs a
+provider tokenizer, and that either puts a vendor dependency inside the
+domain, which the layer rules forbid, or puts the windowing decision in the
+adapter, where business rules do not belong. A message count is provider
+agnostic and testable with no mocking.
+
+Summarisation was rejected on the timebox: it adds a model call per turn to
+save tokens on a conversation that is a handful of turns long.
+
+Consequences
+Cost per turn grows linearly with N until the window fills, then flatlines.
+That is the cost story D12 reports on.
+
+A conversation of long messages can still produce a large request. The bound
+is on count, not size, and the write up should say so rather than imply the
+request is bounded in tokens.
+
+Attachments in history are references, not bytes (ADR-014), so images do not
+multiply the request as history grows. What that costs at the provider is
+S4's problem.
+
+Revisit when
+A conversation runs long enough in use that the window drops something the
+user still refers to, which would mean summarisation earns its keep.
+
+### ADR-024: Images resized on device, sent inline, bytes not persisted
+Date: 2026-08-05
+Status: accepted
+
+Context
+D9. ADR-018 removed audio from the product path, so this covers images only.
+ADR-014 already settles that a Message references an attachment and never
+embeds the bytes; this decides where the bytes go.
+
+Decision
+The photo is resized on device to 1568px on the long edge and compressed to
+JPEG at quality 0.8 before upload, then sent as base64 inside the same POST
+as the question. No separate upload request.
+
+The server does not persist the bytes. The Message carries an ImagePart with
+media type, dimensions and a hash. The image travels to the provider in that
+same call and is not stored.
+
+Hard limit of 5MB after resizing, rejected with the domain error
+AttachmentTooLarge.
+
+Rejected: two-step upload with an attachment storage port. That is the
+production shape and it adds a port and an adapter that demonstrate nothing
+in this prototype.
+
+Consequences
+Stated rather than hidden: a conversation cannot be fully reconstructed from
+the database, because the image is gone. With a message-count window
+(ADR-023) that matters less than it would with full history, but it matters.
+
+A follow up about the same photo re-sends it, which costs. The production
+answer is object storage behind an attachment port, and the write up says so.
+
+03-senior-ux-principles.md required on-device downscaling anyway, because
+uncropped screenshots are large and the connection is slow.
+
+Revisit when
+Conversations need to be reconstructable, or image-heavy follow ups make the
+re-send cost visible.
+
+### ADR-025: Conversation total as a three-part projection, pricing in the domain
+Date: 2026-08-05
+Status: accepted
+
+Context
+D12. ADR-013 made the conversation total a projection over messages rather
+than maintained state. ADR-020 added thoughtTokens after a live call showed
+reasoning was 76 to 90 per cent of spend.
+
+Decision
+The conversation total sums the Usage of its messages, computed on request.
+Pricing lives in a catalogue in the domain: ModelId to price per million
+tokens, with input, output and reasoning priced separately because providers
+bill them separately. The conversation endpoint returns the three token
+figures and the estimated cost, unblended.
+
+Rejected: a single blended total. It is simpler to display and it hides
+exactly what S1 discovered. Repeating that mistake one level up would be
+hard to defend in the write up.
+
+Consequences
+Pricing is product policy, not provider detail, so it sits in the domain and
+changes without the adapter changing.
+
+The prices are the published figures as of August 2026 and are a snapshot,
+not an integration with real billing. The write up states this.
+
+Providers reporting no separate reasoning count contribute zero, which is
+honest rather than approximate.
+
+Revisit when
+A provider prices a component this catalogue does not model, or the total is
+recomputed often enough that a projection is too slow, which at this size it
+is not.
+
+### ADR-026: Persistent disclosure, and "are you a person" as a tested policy rule
+Date: 2026-08-05
+Status: accepted
+
+Context
+D13. The domain half closed with ADR-014, which puts provenance in the
+Message.fromAssistant factory. What remained was the interface.
+
+Decision
+The "AI assistant, not a person" indicator is persistent across every state,
+as the design draws it, with an accessible label for screen readers. Not
+first-screen only: 03-senior-ux-principles.md says a user of 80 forgets
+mid-conversation what they are talking to, especially when the answers are
+good.
+
+The answer to "are you a person" is an explicit rule in the versioned
+product policy in the domain, with a test. Same pattern as ADR-021: a
+requirement that matters is not left to emerge from the model.
+
+The support contact is a static, always visible link reading "Contact
+Control+ support", with no phone number until a real one is available. The
+number in the mockups is a 555-range placeholder and must not ship.
+
+Consequences
+Disclosure and provenance stay two separate obligations, as ADR-006
+required. This closes the disclosure half; provenance shipped in S1.
+
+Utah's AI Policy Act requires disclosure when a user asks directly, so this
+rule is regulatory as well as product. The test is what makes the claim in
+the write up checkable.
+
+Revisit when
+Control+ publishes a support number that can be shown, or a jurisdiction
+requires disclosure in a form this does not cover.
+
+### ADR-027: Concrete user context port, fetched at prompt assembly
+Date: 2026-08-05
+Status: accepted
+
+Context
+D7, committed by ADR-001. What remained was the shape of the contract and
+whether context enriches the Conversation aggregate or is fetched per turn.
+
+Decision
+UserContextPort in domain/ports takes an identifier and returns concrete
+types: last scan date and result, a short list of recent threats with date
+and type, plan name, device count, and family member count. Fetched at
+prompt assembly, not stored on the conversation.
+
+Family member names are deliberately absent from the contract.
+03-senior-ux-principles.md forbids revealing context about other people on
+the account, and a name that is not in the contract cannot leak.
+
+Enriching the Conversation aggregate was rejected: it duplicates state that
+goes stale, and ADR-013 kept Conversation thin on purpose.
+
+The adapter returns fixed sample data. The interface is real; only the
+adapter is a stub (A4).
+
+Consequences
+When the port is slow, empty or failing, assembly proceeds without context
+and the prompt says so, so the assistant states it cannot see the account
+rather than inventing. That is a named degradation D14 inherits.
+
+The contract shape is a declared guess at Control+'s data model (A5). A real
+API replaces the adapter and nothing else.
+
+Context is fetched every turn, which is a call per turn against a stub today
+and against a real service tomorrow. Caching is not in scope and the write
+up says so.
+
+Revisit when
+A real Control+ API contract becomes available, or the per-turn fetch turns
+out to be the wrong granularity.
+
+### ADR-028: Test coverage targets behaviour that was actually at risk
+Date: 2026-08-05
+Status: accepted
+
+Context
+D17. ADR-009 already settled outside-in unit tests and happy-path-only e2e.
+What remained was which behaviours get covered.
+
+Decision
+The list from 02-architecture-principles.md: cancellation, context assembly,
+usage accounting, redaction, failure and fallback. Plus two the build added:
+
+- Deltas arrive separated in time, not merely in the right order. The S1 e2e
+  replayed fixtures with no delay, so a pipeline that buffered everything
+  and flushed at close passed. The suite asserted order; the requirement was
+  separation.
+- The product policy contains the scam check (ADR-021) and the "are you a
+  person" rule (ADR-026). Both are safety requirements that would otherwise
+  depend on the model behaving well.
+
+Consequences
+Behavioural verification against the live model stays manual. A test that
+the rule is in the assembled prompt is not a test that the model obeys it,
+and the write up should not imply otherwise.
+
+Revisit when
+A third safety rule appears, which would mean policy coverage needs a
+pattern rather than a test per rule.
+
+### ADR-029: Timeouts, retry classes and named degradations
+Date: 2026-08-05
+Status: accepted
+
+Context
+D14, first half. Cancellation was already settled by ADR-012, ADR-016 and
+built in S2, so what remained was what happens when a hop is slow, fails, or
+returns something too large.
+
+Decision
+Timeouts: 60s on the generation call, 5s on the user context port, 5s on the
+database.
+
+Retry only on network errors, 429 and 5xx. Two attempts, exponential
+backoff. Never on 4xx, which are our fault and will fail identically.
+
+Degradations, each named rather than implicit:
+- Context port slow or failing: assembly proceeds without context and the
+  prompt says so, per ADR-027, so the assistant states it cannot see the
+  account rather than inventing.
+- Database unavailable at write: the user has already read the answer, so
+  the failure is logged and the user is told the answer was not saved.
+  Pretending it succeeded would be worse.
+- Request over 6MB: rejected before reaching the provider, consistent with
+  the 5MB image limit in ADR-024.
+
+Rejected: retrying the whole generation when a stream fails mid-flight. The
+user has already seen text, and restarting produces a different answer
+underneath the first one. The partial stays visible and the failure is shown.
+
+Consequences
+Every external call now has a timeout and a named failure mode, which is
+what S9 renders in plain language.
+
+The 60s generation timeout is generous because thinking_level minimal
+(ADR-021) brought first text to roughly one second; it protects against a
+hung stream, not against slowness.
+
+Revisit when
+A provider's rate limiting makes two attempts insufficient, or the database
+write failure turns out to be common enough that queueing is warranted.
+
+### ADR-030: Fallback before first text only, triggered by domain error class
+Date: 2026-08-05
+Status: accepted
+
+Context
+D14, second half. ADR-012 defines fallback per port rather than per
+provider, and ADR-017 puts OpenAI second on both capabilities, so fallback
+is symmetric. S10 sits below the cut line.
+
+Decision
+Fallback happens only before the first text chunk. If the primary provider
+fails to open the stream, or fails before any text has reached the client,
+the turn is retried against the secondary and the user sees nothing unusual.
+Once text has been rendered, there is no fallback: the failure is shown with
+the partial still visible.
+
+Triggered by domain error class, never by provider message text:
+ProviderUnavailable, timeout, and 429 after the two attempts in ADR-029 are
+exhausted. Never on 4xx.
+
+Rejected: switching mid-stream and continuing the answer with the secondary.
+It produces one answer in two voices from two models, provenance stops being
+true, and for this user a spliced answer is worse than an honest failure.
+
+Consequences
+Provenance records the provider that actually answered, so a turn that fell
+back is attributed to the secondary. That is correct and the write up says
+so, because D18's cost comparison would otherwise blend two price lists
+without noticing.
+
+Fallback is invisible when it works, which makes it hard to demonstrate. The
+demo should force it rather than hope for it, and S10's tests trigger it by
+domain error rather than by breaking a key.
+
+If S10 falls below the cut line it ships as designed-not-wired with a backlog
+entry, per ADR-007. The port boundary is what makes that claim defensible:
+adding the second adapter is wiring, not a rewrite.
+
+Revisit when
+Mid-stream failures turn out to be common enough that losing the turn
+matters more than answer coherence.
+
+### ADR-031: Redaction is a domain policy, invoked by an infrastructure formatter
+Date: 2026-08-05
+Status: accepted
+
+Context
+D15, the last Tier 1. ADR-004 committed to masking rather than excluding.
+ADR-015 ruled out persisted sensitivity marks, so redaction works on text.
+ADR-007 put the hook in S1, which already masks emails, phone numbers and
+card-shaped digit sequences. What remained was where the boundary sits and
+what observability ships.
+
+Options considered
+A: A pure redaction policy in the domain, called by the log formatter in
+   infrastructure.
+B: A formatter in infrastructure doing the whole job.
+
+Decision
+A. What counts as sensitive in an anti-scam product serving older adults is
+product policy, not a logging detail, and 02-architecture-principles.md says
+product rules live in the domain, versioned. The formatter stays dumb: it
+calls the policy and writes what comes back.
+
+Observability that ships: one structured line per turn carrying conversation
+id, request id, latency, the three token figures, error class, and message
+content after redaction. Nothing else.
+
+Deferred and documented rather than omitted, per A10: tracing, dashboards,
+alerting, and an evaluation pipeline built from real traffic.
+
+Consequences
+The redaction rules are unit-testable with no mocking, and they change
+without touching infrastructure.
+
+Honest limit, already stated in A9: deterministic masking catches structured
+identifiers and not sensitive information expressed in prose, which here is
+most of it. "The man said my account at my bank was frozen" is not
+matchable. Masking narrows exposure; it does not remove it. The write up
+says this rather than implying the logs are safe.
+
+One line per turn correlates to one request because ADR-016 made a turn one
+POST.
+
+Revisit when
+Real traffic exists, at which point retention windows and access controls
+stop being optional, or free-prose detection becomes reliable enough to be
+worth its false positives.
 
 ## Backlog (deliberately deferred)
 
@@ -1244,9 +1636,6 @@ does not look frozen", so removing it without a backend-driven replacement
 trades one breach for another. Both sides of that need the same missing
 capability, so the animation is parked here rather than changed.
 
-
-
-
 ### Decisions I made personally rather than delegating
 
 - ADR-001 through ADR-006, all settled before the architecture work started.
@@ -1277,6 +1666,12 @@ capability, so the animation is parked here rather than changed.
   than pay for reasoning to keep a guarantee that was holding by accident, I
   moved the scam check into the versioned domain policy with a test, where
   02-architecture-principles.md says behavioural rules belong (ADR-021).
+- Keeping redaction in the domain rather than in the log formatter. The
+  assistant offered both and I took the domain, for the third time today
+  applying the same rule: what the assistant is allowed to say, and what
+  counts as sensitive when it says it, is versioned product policy, not a
+  property of whichever layer happens to consume it. The other two were the
+  scam check (ADR-021) and the "are you a person" answer (ADR-026).
 
 ### AI development tools used
 
