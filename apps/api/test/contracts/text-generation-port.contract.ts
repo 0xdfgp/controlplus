@@ -18,8 +18,23 @@ import type {
  * fixtures for them.
  */
 export interface TextGenerationPortScenarios {
-  /** Streams three text runs, then completes with usage 118 in / 27 out / 254 thought. */
+  /** Streams three text runs, then completes with usage 118 in / 27 out. */
   readonly happyPath: () => TextGenerationPort;
+  /**
+   * What `happyPath`'s completion reports as reasoning.
+   *
+   * This is the one number the port cannot fix for every provider, and it is
+   * parameterised rather than asserted because pretending otherwise would make
+   * one provider's billing model a requirement of the port. Gemini bills
+   * reasoning outside input and output and reports it separately (ADR-020);
+   * Anthropic bills it inside output_tokens and reports no separate count
+   * (ADR-032), so zero is what it reported rather than an estimate.
+   *
+   * The invariant that does hold for both, and is asserted unconditionally
+   * below, is that totalTokens() is the three-part sum. That is what the
+   * ADR-020 regression actually broke.
+   */
+  readonly expectedThoughtTokens: number;
   /** Completes with usage reported but no separate reasoning count. */
   readonly noThoughtTokens: () => TextGenerationPort;
   /** Emits a non-answer delta (a thought summary) alongside answer text. */
@@ -104,12 +119,16 @@ export function describeTextGenerationPortContract(
 
       expect(completion.usage.inputTokens.value).toBe(118);
       expect(completion.usage.outputTokens.value).toBe(27);
-      expect(completion.usage.thoughtTokens.value).toBe(254);
+      expect(completion.usage.thoughtTokens.value).toBe(
+        scenarios.expectedThoughtTokens,
+      );
       // The three-part sum, matching the provider's own total (ADR-020).
-      expect(completion.usage.totalTokens().value).toBe(399);
+      expect(completion.usage.totalTokens().value).toBe(
+        118 + 27 + scenarios.expectedThoughtTokens,
+      );
     });
 
-    it('records thinking tokens billed outside input and output', async () => {
+    it('reports whatever the provider said about reasoning, and no more', async () => {
       const chunks = await collect(scenarios.happyPath());
       const completion = chunks.at(-1);
       if (completion?.kind !== 'completion') {
@@ -117,8 +136,12 @@ export function describeTextGenerationPortContract(
       }
 
       // The failure this guards against is a total that silently excludes
-      // reasoning, which understated real spend by roughly ten times.
-      expect(completion.usage.thoughtTokens.value).toBeGreaterThan(0);
+      // reasoning, which on Gemini understated real spend by roughly ten times.
+      // On a provider that reports no separate count the same assertion says
+      // the adapter invented nothing, which is the other way to get this wrong.
+      expect(completion.usage.thoughtTokens.value).toBe(
+        scenarios.expectedThoughtTokens,
+      );
       expect(completion.usage.totalTokens().value).toBe(
         completion.usage.inputTokens.value +
           completion.usage.outputTokens.value +

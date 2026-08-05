@@ -4,11 +4,11 @@ import { AskQuestion } from '../application/ask-question.ts';
 import { ProductPolicy } from '../domain/policy/product-policy.ts';
 import { AnswerGeneration } from '../domain/services/answer-generation.ts';
 import { ModelId } from '../domain/value-objects/model-id.ts';
+import { AnthropicTextGenerationAdapter } from './anthropic/anthropic-text-generation-adapter.ts';
+import { AnthropicMessageStreamOpener } from './anthropic/message-stream.ts';
+import type { MessageStreamOpener } from './anthropic/message-stream.ts';
 import { SystemClock } from './clock/system-clock.ts';
 import type { AppConfig } from './config/load-config.ts';
-import { GeminiTextGenerationAdapter } from './gemini/gemini-text-generation-adapter.ts';
-import { GeminiInteractionStreamOpener } from './gemini/interaction-stream.ts';
-import type { InteractionStreamOpener } from './gemini/interaction-stream.ts';
 import { buildServer } from './http/server.ts';
 import { UuidIdGenerator } from './ids/uuid-id-generator.ts';
 import { TurnLogger } from './logging/turn-logger.ts';
@@ -37,7 +37,7 @@ export interface Application {
 export function composeApplication(
   config: AppConfig,
   overrides: {
-    readonly streamOpener?: InteractionStreamOpener;
+    readonly streamOpener?: MessageStreamOpener;
     readonly logSink?: (line: string) => void;
   } = {},
 ): Application {
@@ -47,13 +47,16 @@ export function composeApplication(
   const idGenerator = new UuidIdGenerator();
   const policy = ProductPolicy.current();
 
+  // Anthropic is the wired provider (ADR-032, superseding ADR-017). The Gemini
+  // adapter is still in the tree and still passes the same port contract; it is
+  // not wired, and wiring it is the whole of S10's work on this side.
   const streamOpener =
     overrides.streamOpener ??
-    GeminiInteractionStreamOpener.withApiKey(config.geminiApiKey);
+    AnthropicMessageStreamOpener.withApiKey(config.anthropicApiKey);
 
-  const textGeneration = new GeminiTextGenerationAdapter(
+  const textGeneration = new AnthropicTextGenerationAdapter(
     streamOpener,
-    ModelId.fromString(config.geminiModel),
+    ModelId.fromString(config.anthropicModel),
   );
 
   const answerGeneration = new AnswerGeneration(

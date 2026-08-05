@@ -6,29 +6,46 @@ import { composeApplication } from '../../src/infrastructure/composition-root.ts
 import type { Application } from '../../src/infrastructure/composition-root.ts';
 import { loadConfig } from '../../src/infrastructure/config/load-config.ts';
 import type {
-  InteractionEvent,
-  InteractionStream,
-  InteractionStreamOpener,
-} from '../../src/infrastructure/gemini/interaction-stream.ts';
+  AnthropicEvent,
+  MessageStream,
+  MessageStreamOpener,
+} from '../../src/infrastructure/anthropic/message-stream.ts';
 import {
-  ERROR_EVENTS,
+  EVENTS_BEFORE_ERROR,
   HAPPY_PATH_EVENTS,
-} from '../__fixtures__/gemini-interaction-events.ts';
+} from '../__fixtures__/anthropic-message-events.ts';
 import { deleteConversation, TEST_DATABASE_URL } from '../support/test-database.ts';
 
-/** The provider is stubbed. Everything else — HTTP, Postgres — is real. */
-class StubStreamOpener implements InteractionStreamOpener {
-  constructor(private events: readonly InteractionEvent[]) {}
+/** A typed SDK exception, as the real client raises it mid-stream. */
+class StubApiError extends Error {
+  readonly status = 529;
 
-  use(events: readonly InteractionEvent[]): void {
+  constructor() {
+    super('Overloaded');
+    this.name = 'APIError';
+  }
+}
+
+/** The provider is stubbed. Everything else — HTTP, Postgres — is real. */
+class StubStreamOpener implements MessageStreamOpener {
+  private failMidStream: Error | null = null;
+
+  constructor(private events: readonly AnthropicEvent[]) {}
+
+  use(events: readonly AnthropicEvent[], failMidStream: Error | null = null): void {
     this.events = events;
+    this.failMidStream = failMidStream;
   }
 
-  async open(): Promise<InteractionStream> {
+  async open(): Promise<MessageStream> {
     const events = this.events;
-    async function* replay(): AsyncGenerator<InteractionEvent> {
+    const failMidStream = this.failMidStream;
+    async function* replay(): AsyncGenerator<AnthropicEvent> {
       for (const event of events) {
         yield event;
+      }
+      if (failMidStream !== null) {
+        throw failMidStream;
       }
     }
     const iterator = replay();
@@ -101,7 +118,7 @@ beforeAll(async () => {
   const config = loadConfig({
     ...process.env,
     DATABASE_URL: TEST_DATABASE_URL,
-    GEMINI_API_KEY: 'stubbed-in-e2e',
+    ANTHROPIC_API_KEY: 'sk-ant-stubbed-in-e2e',
   });
   application = composeApplication(config, {
     streamOpener,
@@ -185,13 +202,18 @@ describe('POST /conversations/:id/messages, happy path', () => {
     expect(done.state).toBe('completed');
     expect(done.provenance).toEqual({
       origin: 'ai-generated',
-      modelId: 'gemini-3.5-flash',
-      provider: 'google',
+      // The dated snapshot, not the alias we asked for. This is what every
+      // live call actually reports, and provenance records what answered
+      // rather than what was requested (ADR-030).
+      modelId: 'claude-sonnet-4-5-20250929',
+      provider: 'anthropic',
     });
     expect(done.usage).toEqual({
       inputTokens: 118,
       outputTokens: 27,
-      thoughtTokens: 254,
+      // AC2. Anthropic reports no separate reasoning count, so this is zero
+      // because that is what the provider said, not because nothing was spent.
+      thoughtTokens: 0,
     });
   });
 
@@ -211,9 +233,9 @@ describe('POST /conversations/:id/messages, happy path', () => {
     expect(typeof line.latencyMs).toBe('number');
     expect(line.inputTokens).toBe(118);
     expect(line.outputTokens).toBe(27);
-    // Without this the logged spend is the input/output pair alone, which on
-    // the live numbers understated the real total by roughly ten times.
-    expect(line.thoughtTokens).toBe(254);
+    // The field stays in the log line even at zero, so the Gemini and Anthropic
+    // turns are read from the same shape rather than one silently missing it.
+    expect(line.thoughtTokens).toBe(0);
     expect(line.errorClass).toBeNull();
     expect(line.question).toBe('Is mail from [email] a scam?');
     expect(line.question).not.toContain('bob@example.com');
@@ -222,7 +244,7 @@ describe('POST /conversations/:id/messages, happy path', () => {
 
 describe('POST /conversations/:id/messages, failure path', () => {
   it('emits an error event naming ProviderUnavailable and no provider text', async () => {
-    streamOpener.use(ERROR_EVENTS);
+    streamOpener.use(EVENTS_BEFORE_ERROR, new StubApiError());
 
     const { events } = await ask(nextConversationId(), 'Is this a scam?');
 
@@ -232,11 +254,11 @@ describe('POST /conversations/:id/messages, failure path', () => {
       throw new Error('expected an error event');
     }
     expect(error.error).toBe('ProviderUnavailable');
-    expect(JSON.stringify(error)).not.toContain('overloaded');
+    expect(JSON.stringify(error)).not.toContain('Overloaded');
   });
 
   it('writes no assistant message row', async () => {
-    streamOpener.use(ERROR_EVENTS);
+    streamOpener.use(EVENTS_BEFORE_ERROR, new StubApiError());
     const conversationId = nextConversationId();
 
     await ask(conversationId, 'Is this a scam?');
@@ -249,7 +271,7 @@ describe('POST /conversations/:id/messages, failure path', () => {
   });
 
   it('logs the turn with the error class', async () => {
-    streamOpener.use(ERROR_EVENTS);
+    streamOpener.use(EVENTS_BEFORE_ERROR, new StubApiError());
 
     await ask(nextConversationId(), 'Is this a scam?');
 
@@ -294,13 +316,18 @@ describe('persistence after a completed turn', () => {
     expect(rows.rows[0]?.provenance).toBeNull();
     expect(rows.rows[1]?.provenance).toEqual({
       origin: 'ai-generated',
-      modelId: 'gemini-3.5-flash',
-      provider: 'google',
+      // The dated snapshot, not the alias we asked for. This is what every
+      // live call actually reports, and provenance records what answered
+      // rather than what was requested (ADR-030).
+      modelId: 'claude-sonnet-4-5-20250929',
+      provider: 'anthropic',
     });
     expect(rows.rows[1]?.usage).toEqual({
       inputTokens: 118,
       outputTokens: 27,
-      thoughtTokens: 254,
+      // AC2. Anthropic reports no separate reasoning count, so this is zero
+      // because that is what the provider said, not because nothing was spent.
+      thoughtTokens: 0,
     });
   });
 });

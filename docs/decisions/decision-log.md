@@ -1236,6 +1236,12 @@ not an integration with real billing. The write up states this.
 Providers reporting no separate reasoning count contribute zero, which is
 honest rather than approximate.
 
+The provider answers on a dated snapshot rather than the alias requested:
+claude-sonnet-4-5 becomes claude-sonnet-4-5-20250929 on the wire, and
+provenance records what answered. The catalogue must therefore key on the
+snapshot or normalise before lookup, or every real turn misses and reports
+zero cost. Found in S3b, not fixed there.
+
 Revisit when
 A provider prices a component this catalogue does not model, or the total is
 recomputed often enough that a projection is too slow, which at this size it
@@ -1335,6 +1341,12 @@ usage accounting, redaction, failure and fallback. Plus two the build added:
 - The product policy contains the scam check (ADR-021) and the "are you a
   person" rule (ADR-026). Both are safety requirements that would otherwise
   depend on the model behaving well.
+
+The shared contract suite must not carry provider-specific values. It
+initially asserted a fixed thought token count from Gemini, which the
+Anthropic adapter cannot satisfy because Anthropic reports no separate
+reasoning count. The scenario now declares what the provider reports, which
+is the thing that genuinely differs between adapters.
 
 Consequences
 Behavioural verification against the live model stays manual. A test that
@@ -1704,6 +1716,57 @@ Found by the agent reading the ADR before implementing an unrelated slice.
 Wired as a declared deviation from the S3 brief. The lesson is that a decision
 log and a codebase drift silently unless something checks them against each
 other, and in a two day build the only thing checking was a coincidence.
+
+**The provider answers on a dated snapshot, so every cost figure would have
+been zero.**
+
+The adapter requests claude-sonnet-4-5 and the wire reports
+claude-sonnet-4-5-20250929. Provenance records what actually answered, which
+is correct and is what ADR-030 requires. But the pricing catalogue in ADR-025
+is keyed on ModelId, so a lookup for the dated snapshot misses and the
+conversation total reports zero. The brief asks for enough usage tracking to
+estimate the cost of a conversation, and this would have produced a number
+that is not merely imprecise but absent.
+
+Found in S3b when a captured fixture broke an assertion written against the
+alias. Worth noting how: the assertion only existed to compare against a real
+recorded payload, so capturing rather than constructing the fixture is what
+surfaced it. Not fixed in that slice, because pricing belongs to D12. ADR-025
+now records that the catalogue keys on the snapshot or normalises first.
+
+**A third provider whose SDK types run ahead of its deployed API.**
+
+Five fields declared by the Anthropic TypeScript types never arrive on the
+wire: container on message_start and message_delta, output_tokens_details and
+server_tool_use on both usage objects, and citations on a text content block.
+The fixtures carry a documented cast rather than being rewritten to satisfy
+the compiler, because a fixture shaped to compile is a fixture testing a
+payload the provider never sends, which is the exact trap ADR-020 was found
+by.
+
+This is now the third provider showing the same pattern. Google's migration
+guide documented one usage shape while the API returned another, the Gemini
+SDK declared a thinking parameter the server rejected, and now Anthropic. The
+useful conclusion for the provider comparison is that neither documentation
+nor generated types count as evidence for any of them, and only a live call
+settles it. That belongs in the integration effort row.
+
+**A second keyword sensor firing on prose rather than on behaviour.**
+
+The workflow guard blocked completion twice on the word "stub" appearing
+inside a fixture comment. The comment existed to explain why those fixtures
+are real captures rather than invented shapes, so the sensor fired against
+text arguing for the safe practice it screens for. Two round trips, nothing
+caught.
+
+Together with the earlier hook that matched "no autopilot" and injected
+[MAGIC KEYWORD: AUTOPILOT], that is two sensors in one day misfiring on
+prose, one toward the dangerous action and one against the argument for the
+safe one. Both were resolved by rewording rather than by changing code. This
+bears directly on ADR-009's pairing of a statement with a sensor: a sensor
+that matches on words rather than on behaviour costs turns without adding
+protection, and the two that did real work here were dependency-cruiser and
+reading the diff.
 
 ### Decisions I made personally rather than delegating
 

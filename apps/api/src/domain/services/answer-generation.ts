@@ -135,10 +135,10 @@ export class AnswerGeneration {
           conversation,
           answer,
           provenance,
-          // Gemini reports usage only on interaction.completed, which a stopped
-          // turn never reaches. Zero is what the provider reported. It is not
-          // an estimate of what the turn cost, and the write up should not read
-          // it as one.
+          // Providers report the turn's usage on a completion event that a
+          // stopped turn never reaches. Zero is what the provider reported. It
+          // is not an estimate of what the turn cost, and the write up should
+          // not read it as one.
           Usage.fromCounts(0, 0, 0),
           'stopped',
         );

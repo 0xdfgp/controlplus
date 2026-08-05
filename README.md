@@ -17,13 +17,13 @@ absent and which slice it belongs to.
 - Node 22 or newer (developed on 25.6.1)
 - Docker, running
 - Xcode, for the iOS build
-- A Gemini API key
+- An Anthropic API key
 
 ## Getting it running
 
 ```bash
 # 1. Your provider key. The API refuses to start without it.
-echo "GEMINI_API_KEY=your-key-here" > .env
+echo "ANTHROPIC_API_KEY=sk-ant-your-key-here" > .env
 
 # 2. Dependencies.
 npm install
@@ -72,8 +72,10 @@ The provider is stubbed everywhere in the suite. No test makes a network call.
 
 | Variable | Default | Required |
 |---|---|---|
-| `GEMINI_API_KEY` | — | Yes. The API exits at startup without it. |
+| `ANTHROPIC_API_KEY` | — | Yes. The API exits at startup if it is missing or does not start with `sk-ant-`. |
 | `DATABASE_URL` | `postgres://controlplus:controlplus@localhost:5433/controlplus` | No |
+| `ANTHROPIC_MODEL` | `claude-sonnet-4-5` | No |
+| `GEMINI_API_KEY` | — | No. The Gemini adapter is the second implementation of the port and is not wired (ADR-032). |
 | `GEMINI_MODEL` | `gemini-3.5-flash` | No |
 | `PORT` | `3000` | No |
 | `LOG_LEVEL` | `info` | No |

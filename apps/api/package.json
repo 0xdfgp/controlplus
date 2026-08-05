@@ -9,6 +9,7 @@
     "db:migrate": "tsx src/infrastructure/persistence/migrate.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@control-plus/contracts": "*",
     "@google/genai": "^2.15.0",
     "drizzle-orm": "^0.45.2",

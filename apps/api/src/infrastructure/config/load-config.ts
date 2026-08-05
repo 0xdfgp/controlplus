@@ -1,5 +1,7 @@
 export interface AppConfig {
   readonly databaseUrl: string;
+  readonly anthropicApiKey: string;
+  readonly anthropicModel: string;
   readonly geminiApiKey: string;
   readonly geminiModel: string;
   readonly port: number;
@@ -8,8 +10,20 @@ export interface AppConfig {
 
 const DEFAULT_DATABASE_URL =
   'postgres://controlplus:controlplus@localhost:5433/controlplus';
-const DEFAULT_MODEL = 'gemini-3.5-flash';
+const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-5';
+const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 const DEFAULT_PORT = 3000;
+
+/**
+ * Every Anthropic key starts with this.
+ *
+ * Checking it catches the failure that produced ADR-032 in the first place: a
+ * credential for one provider pasted into another provider's variable, which
+ * authenticates as far as the first user request and no further. The check is
+ * a prefix and not a network call, so a well-formed but revoked key still gets
+ * through here and fails on first use — stated in the brief rather than hidden.
+ */
+const ANTHROPIC_KEY_PREFIX = 'sk-ant-';
 
 export class ConfigurationError extends Error {
   override readonly name = 'ConfigurationError';
@@ -32,12 +46,25 @@ export function loadConfig(
   const requireProviderKey = options.requireProviderKey ?? true;
   const problems: string[] = [];
 
-  const geminiApiKey = (env.GEMINI_API_KEY ?? '').trim();
-  if (requireProviderKey && geminiApiKey.length === 0) {
+  // Anthropic is the wired provider (ADR-032). Gemini stays configurable
+  // because its adapter is still in the tree as the second implementation of
+  // the port, but it is no longer required to start.
+  const anthropicApiKey = (env.ANTHROPIC_API_KEY ?? '').trim();
+  if (requireProviderKey && anthropicApiKey.length === 0) {
     problems.push(
-      'GEMINI_API_KEY is missing. The API will not start without a provider key.',
+      'ANTHROPIC_API_KEY is missing. The API will not start without a provider key.',
+    );
+  } else if (
+    requireProviderKey &&
+    !anthropicApiKey.startsWith(ANTHROPIC_KEY_PREFIX)
+  ) {
+    problems.push(
+      `ANTHROPIC_API_KEY does not start with "${ANTHROPIC_KEY_PREFIX}", so it is not an Anthropic key. ` +
+        'Check that a key for another provider has not been pasted into it.',
     );
   }
+
+  const geminiApiKey = (env.GEMINI_API_KEY ?? '').trim();
 
   const databaseUrl = (env.DATABASE_URL ?? DEFAULT_DATABASE_URL).trim();
   if (databaseUrl.length === 0) {
@@ -62,8 +89,10 @@ export function loadConfig(
 
   return {
     databaseUrl,
+    anthropicApiKey,
+    anthropicModel: (env.ANTHROPIC_MODEL ?? DEFAULT_ANTHROPIC_MODEL).trim(),
     geminiApiKey,
-    geminiModel: (env.GEMINI_MODEL ?? DEFAULT_MODEL).trim(),
+    geminiModel: (env.GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL).trim(),
     port,
     logLevel: logLevel as 'silent' | 'info',
   };

@@ -4,10 +4,10 @@ import { composeApplication } from '../../src/infrastructure/composition-root.ts
 import type { Application } from '../../src/infrastructure/composition-root.ts';
 import { loadConfig } from '../../src/infrastructure/config/load-config.ts';
 import type {
-  InteractionEvent,
-  InteractionStream,
-  InteractionStreamOpener,
-} from '../../src/infrastructure/gemini/interaction-stream.ts';
+  AnthropicEvent,
+  MessageStream,
+  MessageStreamOpener,
+} from '../../src/infrastructure/anthropic/message-stream.ts';
 import { deleteConversation, TEST_DATABASE_URL } from '../support/test-database.ts';
 
 /**
@@ -26,31 +26,31 @@ import { deleteConversation, TEST_DATABASE_URL } from '../support/test-database.
 const CHUNK_GAP_MS = 120;
 const TEXT_CHUNKS = ['That message ', 'has two signs ', 'of a scam.'];
 
-class SlowStubStreamOpener implements InteractionStreamOpener {
-  async open(): Promise<InteractionStream> {
-    async function* replay(): AsyncGenerator<InteractionEvent> {
+class SlowStubStreamOpener implements MessageStreamOpener {
+  async open(): Promise<MessageStream> {
+    async function* replay(): AsyncGenerator<AnthropicEvent> {
       for (const text of TEXT_CHUNKS) {
         await new Promise((resolve) => setTimeout(resolve, CHUNK_GAP_MS));
         yield {
-          event_type: 'step.delta',
+          type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text', text },
-        } as unknown as InteractionEvent;
+          delta: { type: 'text_delta', text },
+        };
       }
       await new Promise((resolve) => setTimeout(resolve, CHUNK_GAP_MS));
       yield {
-        event_type: 'interaction.completed',
-        interaction: {
-          id: 'int_slow',
-          model: 'gemini-3.5-flash',
-          status: 'completed',
-          usage: {
-            total_input_tokens: 10,
-            total_output_tokens: 5,
-            total_thought_tokens: 3,
-          },
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_details: null, stop_sequence: null, container: null },
+        usage: {
+          cache_creation_input_tokens: null,
+          cache_read_input_tokens: null,
+          input_tokens: 10,
+          output_tokens: 5,
+          output_tokens_details: null,
+          server_tool_use: null,
         },
-      } as unknown as InteractionEvent;
+      };
+      yield { type: 'message_stop' };
     }
     const iterator = replay();
     return {
@@ -129,7 +129,7 @@ beforeAll(async () => {
   const config = loadConfig({
     ...process.env,
     DATABASE_URL: TEST_DATABASE_URL,
-    GEMINI_API_KEY: 'stubbed-in-timing-e2e',
+    ANTHROPIC_API_KEY: 'sk-ant-stubbed-in-timing-e2e',
   });
   application = composeApplication(config, {
     streamOpener: new SlowStubStreamOpener(),

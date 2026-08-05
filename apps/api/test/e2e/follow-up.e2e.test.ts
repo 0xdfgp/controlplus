@@ -6,11 +6,11 @@ import { composeApplication } from '../../src/infrastructure/composition-root.ts
 import type { Application } from '../../src/infrastructure/composition-root.ts';
 import { loadConfig } from '../../src/infrastructure/config/load-config.ts';
 import type {
-  InteractionEvent,
-  InteractionStream,
-  InteractionStreamOpener,
-  InteractionStreamRequest,
-} from '../../src/infrastructure/gemini/interaction-stream.ts';
+  AnthropicEvent,
+  MessageStream,
+  MessageStreamOpener,
+  MessageStreamRequest,
+} from '../../src/infrastructure/anthropic/message-stream.ts';
 import { deleteConversation, TEST_DATABASE_URL } from '../support/test-database.ts';
 
 /**
@@ -25,32 +25,32 @@ const ANSWERS = [
   'On your phone, open Settings and then tap Safety.',
 ];
 
-class RecordingStubOpener implements InteractionStreamOpener {
-  readonly requests: InteractionStreamRequest[] = [];
+class RecordingStubOpener implements MessageStreamOpener {
+  readonly requests: MessageStreamRequest[] = [];
 
-  async open(request: InteractionStreamRequest): Promise<InteractionStream> {
+  async open(request: MessageStreamRequest): Promise<MessageStream> {
     const answer = ANSWERS[this.requests.length] ?? 'A later answer.';
     this.requests.push(request);
 
-    async function* replay(): AsyncGenerator<InteractionEvent> {
+    async function* replay(): AsyncGenerator<AnthropicEvent> {
       yield {
-        event_type: 'step.delta',
+        type: 'content_block_delta',
         index: 0,
-        delta: { type: 'text', text: answer },
-      } as unknown as InteractionEvent;
+        delta: { type: 'text_delta', text: answer },
+      };
       yield {
-        event_type: 'interaction.completed',
-        interaction: {
-          id: 'int_follow_up',
-          model: 'gemini-3.5-flash',
-          status: 'completed',
-          usage: {
-            total_input_tokens: 40,
-            total_output_tokens: 12,
-            total_thought_tokens: 0,
-          },
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_details: null, stop_sequence: null, container: null },
+        usage: {
+          cache_creation_input_tokens: null,
+          cache_read_input_tokens: null,
+          input_tokens: 40,
+          output_tokens: 12,
+          output_tokens_details: null,
+          server_tool_use: null,
         },
-      } as unknown as InteractionEvent;
+      };
+      yield { type: 'message_stop' };
     }
 
     const iterator = replay();
@@ -118,7 +118,7 @@ beforeAll(async () => {
   const config = loadConfig({
     ...process.env,
     DATABASE_URL: TEST_DATABASE_URL,
-    GEMINI_API_KEY: 'stubbed-in-follow-up-e2e',
+    ANTHROPIC_API_KEY: 'sk-ant-stubbed-in-follow-up-e2e',
   });
   application = composeApplication(config, {
     streamOpener,
@@ -151,9 +151,9 @@ describe('a follow up in the same conversation', () => {
     await ask(conversationId, 'And how do I do that on my phone?');
 
     expect(streamOpener.requests).toHaveLength(2);
-    expect(streamOpener.requests[1]?.input).toEqual([
+    expect(streamOpener.requests[1]?.messages).toEqual([
       { role: 'user', content: 'Is this text about my bank a scam?' },
-      { role: 'model', content: ANSWERS[0] },
+      { role: 'assistant', content: ANSWERS[0] },
       { role: 'user', content: 'And how do I do that on my phone?' },
     ]);
   });
@@ -163,7 +163,7 @@ describe('a follow up in the same conversation', () => {
 
     await ask(conversationId, 'Is this text about my bank a scam?');
 
-    expect(streamOpener.requests[0]?.input).toEqual([
+    expect(streamOpener.requests[0]?.messages).toEqual([
       { role: 'user', content: 'Is this text about my bank a scam?' },
     ]);
   });
@@ -177,7 +177,7 @@ describe('a follow up in the same conversation', () => {
 
     // A second conversation starting mid-history would be a stranger's answer
     // arriving in someone else's screen.
-    expect(streamOpener.requests[1]?.input).toEqual([
+    expect(streamOpener.requests[1]?.messages).toEqual([
       { role: 'user', content: 'What is a passcode?' },
     ]);
   });

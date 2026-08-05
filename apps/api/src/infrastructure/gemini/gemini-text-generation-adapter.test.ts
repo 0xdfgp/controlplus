@@ -88,6 +88,8 @@ describeTextGenerationPortContract('GeminiTextGenerationAdapter', {
     sharedOpener = new RecordedStreamOpener(HAPPY_PATH_EVENTS);
     return new GeminiTextGenerationAdapter(sharedOpener, DEFAULT_MODEL);
   },
+  // Gemini bills thinking outside input and output and reports it (ADR-020).
+  expectedThoughtTokens: 254,
   noThoughtTokens: () =>
     new GeminiTextGenerationAdapter(
       new RecordedStreamOpener(NO_THOUGHT_TOKENS_EVENTS),
