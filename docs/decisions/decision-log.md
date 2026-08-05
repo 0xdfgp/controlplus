@@ -1162,6 +1162,10 @@ conversations, so the bound could not be demonstrated working and the cost
 flatline this ADR describes would stay theoretical. Ten is five turns, enough
 for any follow up in a demo, and it fills. Production would raise it.
 
+A message whose parts render to no text would drop out of the window
+entirely. S4 added a notice for image-only messages, matching the one already
+used for stopped answers.
+
 Revisit when
 A conversation runs long enough in use that the window drops something the
 user still refers to, which would mean summarisation earns its keep.
@@ -1211,6 +1215,11 @@ arrives without spending a slow upload first. The two numbers are left
 disagreeing deliberately rather than tuned to meet, because the device check
 is the real protection and the server limit is the one that must not be
 trusted to a client.
+
+Measured live in S4: an image costs 1,348 input tokens, reproduced across two
+runs. A follow up after an image turn costs 560, which confirms the bytes are
+paid for once because history carries a reference rather than the image. A
+follow up that re-attaches the same photo would pay the 1,348 again.
 
 Revisit when
 Conversations need to be reconstructable, or image-heavy follow ups make the
@@ -1404,6 +1413,10 @@ what S9 renders in plain language.
 The 60s generation timeout is generous because thinking_level minimal
 (ADR-021) brought first text to roughly one second; it protects against a
 hung stream, not against slowness.
+
+Not covered, and found the hard way in S4: no React test renderer exists, so
+no screen is tested. Three interface defects shipped green and appeared only
+on the device.
 
 Revisit when
 A provider's rate limiting makes two attempts insufficient, or the database
@@ -1839,6 +1852,23 @@ bears directly on ADR-009's pairing of a statement with a sensor: a sensor
 that matches on words rather than on behaviour costs turns without adding
 protection, and the two that did real work here were dependency-cruiser and
 reading the diff.
+
+**Three interface bugs that no test could have caught.**
+
+S4 shipped with a green suite and three defects that only appeared on the
+device: the turn machine hung its exit from the uploading state on an upload
+finished event React Native never emits, so a completed answer was refused by
+a stalled machine; the composer overflowed behind the keyboard while
+keyboardShouldPersistTaps swallowed taps; and the fix for that broke
+scrolling.
+
+None were catchable, because the project has no React test renderer and no
+test has ever rendered a screen. Application and domain behaviour is well
+covered and the interface is covered by nobody. For a product whose whole
+argument is that the interface is right for someone of 80, that is the wrong
+side of the codebase to leave untested. Recorded as a gap rather than fixed:
+adding a renderer and screen tests is real work and it competes with shipping
+the remaining input mode.
 
 ### Decisions I made personally rather than delegating
 
