@@ -126,8 +126,29 @@ Mobile
    answer text exists.
 
 3. Given a question has been sent, when the provider begins streaming, then
-   answer text appears progressively and the label changes to the responding
-   state.
+   the answer arrives in pieces separated in time rather than in one delivery,
+   and the screen renders more than once as it arrives.
+
+   Stated this way because the original wording assumed the provider starts
+   emitting text quickly, which is false with thinking enabled. Measured
+   against the live API, a turn spent 14.9s and 29.7s producing no text at all
+   before the first delta. "Text appears early" is therefore not a property of
+   the pipeline and cannot be asserted; what the pipeline owes is that
+   whatever text exists reaches the screen as it is produced.
+
+   Verified at two points, because a correct sequence of events proves
+   nothing about timing:
+   - at the wire: the gap between the first and last message.delta is
+     non-zero, and the deltas arrive as separate reads rather than in one
+   - at the client: the render path runs more than once before the stream
+     closes
+
+   The responding state is signalled by text appearing, not by a label
+   (03 state table). A label covers only the gap before the first delta.
+
+   Note: the wait before the first delta is a separate concern, and is not
+   accounted for by anything on screen. See the parked note in the decision
+   log; it is not satisfiable with the Interactions API as it stands.
 
 4. Given a completed answer, when the stream closes, then a message row
    exists whose provenance records that it was AI generated with the model

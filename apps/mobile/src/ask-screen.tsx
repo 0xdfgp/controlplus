@@ -3,7 +3,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -11,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { RespondingState } from './responding-state.tsx';
 import { SupportFooter } from './support-footer.tsx';
 import { theme } from './theme.ts';
 import { ThinkingIndicator } from './thinking-indicator.tsx';
@@ -117,34 +117,6 @@ function IdleState({
   );
 }
 
-function RespondingState({
-  question,
-  answer,
-  errorMessage,
-}: {
-  question: string;
-  answer: string;
-  errorMessage: string | null;
-}): React.JSX.Element {
-  return (
-    <ScrollView
-      style={styles.answerArea}
-      contentContainerStyle={styles.answerContent}
-    >
-      <Text style={styles.question}>You asked: “{question}”</Text>
-      {errorMessage === null ? (
-        <Text style={styles.answer} accessibilityLiveRegion="polite">
-          {answer}
-        </Text>
-      ) : (
-        <Text style={styles.error} accessibilityLiveRegion="polite">
-          {errorMessage}
-        </Text>
-      )}
-    </ScrollView>
-  );
-}
-
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.colors.background },
   body: { flex: 1, paddingHorizontal: theme.spacing(3) },
@@ -177,14 +149,4 @@ const styles = StyleSheet.create({
   sendButtonDisabled: { opacity: 0.45 },
   sendButtonPressed: { opacity: 0.8 },
   sendLabel: { fontSize: 22, fontWeight: '700', color: '#FFFFFF' },
-  answerArea: { flex: 1 },
-  answerContent: { paddingVertical: theme.spacing(2) },
-  question: {
-    fontSize: theme.minimumBodyFontSize,
-    fontStyle: 'italic',
-    color: theme.colors.muted,
-    marginBottom: theme.spacing(2),
-  },
-  answer: { fontSize: 22, lineHeight: 32, color: theme.colors.text },
-  error: { fontSize: 22, lineHeight: 32, color: theme.colors.text },
 });
