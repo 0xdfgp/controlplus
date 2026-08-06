@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isInFlight, isVoiceTurn, transition } from './turn-machine.ts';
+import { canRetry, isInFlight, isVoiceTurn, transition } from './turn-machine.ts';
 import type { TurnEvent, TurnState } from './turn-machine.ts';
 
 const STATES: readonly TurnState[] = [
@@ -226,6 +226,46 @@ describe('asking by speaking (E4, E6)', () => {
     // has no photo on it, and nothing in this slice sends both.
     expect(transition('reviewing', 'upload')).toBeNull();
     expect(transition('recording', 'upload')).toBeNull();
+  });
+});
+
+describe('retrying a failed answer (E8)', () => {
+  it('offers Try again on a failed turn and nowhere else', () => {
+    // Every failure the client can render arrives in this one state: a provider
+    // failure and a database failure through the stream's error event, a timeout
+    // and a lost connection through its transport error. So one state is the
+    // whole of "retry is available on every failure", including a second failure
+    // after a retry — which lands back here.
+    expect(STATES.filter(canRetry)).toEqual(['failed']);
+  });
+
+  it('goes from failed to thinking, which is what the person sees', () => {
+    expect(transition('failed', 'ask')).toBe('thinking');
+  });
+
+  it('goes back through uploading when the question carried a photo', () => {
+    // The photo is sent again in the body, so it is genuinely leaving the phone
+    // again. Going straight to thinking would put "Thinking about your question"
+    // on screen while several megabytes were still on their way out.
+    expect(transition('failed', 'upload')).toBe('uploading');
+  });
+
+  it('is refused while a turn is under way', () => {
+    // The button is not drawn outside `failed`, and a tap cannot be aimed at
+    // what is not there. This is the second lock: `useTurn` reads the machine
+    // again before re-sending, because the state a tap was aimed at and the state
+    // it arrives in are not always the same one.
+    for (const state of STATES.filter(isInFlight)) {
+      expect(canRetry(state)).toBe(false);
+    }
+  });
+
+  it('offers no retry on a turn that finished or was stopped', () => {
+    // Nothing failed in either, and the input is already there to ask again
+    // with. A retry control on a good answer would be an invitation to re-ask a
+    // question that was answered.
+    expect(canRetry('idle')).toBe(false);
+    expect(canRetry('stopped')).toBe(false);
   });
 });
 

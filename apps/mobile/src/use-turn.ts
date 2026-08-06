@@ -1,46 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { appendTurn } from './conversation-log.ts';
+import { appendTurn, dropFailedTurn } from './conversation-log.ts';
 import type { LoggedTurn } from './conversation-log.ts';
 import { FAILURE_SENTENCE, sentenceFor } from './failure-sentences.ts';
 import { askQuestionStream } from './streaming/ask-question-stream.ts';
-import { transition } from './turn-machine.ts';
-import type { TurnEvent, TurnState } from './turn-machine.ts';
+import { canRetry, transition } from './turn-machine.ts';
+import type { TurnEvent } from './turn-machine.ts';
+import type { Turn } from './turn.ts';
 import { useAnswerBuffer } from './use-answer-buffer.ts';
+import { useLastAsk } from './use-last-ask.ts';
 import { useTurnState } from './use-turn-state.ts';
 import { toImagePayload } from './use-photo.ts';
 import type { Photo } from './use-photo.ts';
-
-export interface Turn {
-  /** Finished turns, oldest first. The live turn is not in here. */
-  readonly history: readonly LoggedTurn[];
-  readonly state: TurnState;
-  readonly question: string;
-  readonly answer: string;
-  readonly errorMessage: string | null;
-  /** The photo sent with the live turn, for the screen to show. */
-  readonly photoUri: string | null;
-  /**
-   * How much of the photo has left the phone, 0 to 1, or null when nothing is
-   * measuring it. Null rather than 0: "none yet" and "nobody is telling us"
-   * are different, and only one of them is honest to draw as a bar.
-   */
-  readonly progress: number | null;
-  ask: (question: string, photo?: Photo | null) => void;
-  stop: () => void;
-  /** The person tapped "Speak instead". */
-  speak: () => void;
-  /** They tapped "I'm done", so the recogniser is being asked for the words. */
-  transcribe: () => void;
-  /** The words arrived and are on screen to be checked before anything is sent. */
-  transcribed: () => void;
-  /**
-   * The spoken question came to nothing: a refused microphone, a phone that
-   * cannot transcribe, or a recording that heard nothing. Back to idle with a
-   * sentence to read, never to `failed`.
-   */
-  discard: () => void;
-}
 
 export function useTurn(baseUrl: string, conversationId: string): Turn {
   const [history, setHistory] = useState<readonly LoggedTurn[]>([]);
@@ -53,6 +24,9 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
   const asked = useRef('');
   const sentPhoto = useRef<string | null>(null);
   const cancel = useRef<(() => void) | null>(null);
+
+  /** What Try again would send again. */
+  const lastAsk = useLastAsk();
 
   /** The machine, and the only way this hook changes state. */
   const { state, now, apply } = useTurnState();
@@ -108,6 +82,7 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
       cancel.current?.();
       asked.current = trimmed;
       sentPhoto.current = photo?.uri ?? null;
+      lastAsk.remember(trimmed, photo ?? null);
       setQuestion(trimmed);
       setPhotoUri(photo?.uri ?? null);
       setProgress(null);
@@ -152,7 +127,7 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
         },
       );
     },
-    [apply, baseUrl, buffer, conversationId, settle],
+    [apply, baseUrl, buffer, conversationId, lastAsk, settle],
   );
 
   /**
@@ -171,6 +146,27 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
     cancel.current = null;
     settle('stop', null);
   }, [now, settle]);
+
+  /**
+   * Send the failed question again (E8).
+   *
+   * The state is read from the machine rather than from a render, for the same
+   * reason `stop` does: a tap arrives with whatever the closure was holding, and
+   * only the machine knows where the turn actually is. `ask` then picks its own
+   * event, so a question that carried a photo goes back through uploading and a
+   * typed one goes straight to thinking.
+   *
+   * The failed attempt comes off the conversation first, so the retry appears
+   * where it was rather than beneath it.
+   */
+  const retry = useCallback(() => {
+    const last = lastAsk.read();
+    if (last === null || !canRetry(now())) {
+      return;
+    }
+    setHistory(dropFailedTurn);
+    ask(last.question, last.photo);
+  }, [ask, lastAsk, now]);
 
   // The four voice transitions (ADR-018, ADR-022). Each is one event and
   // nothing else: no request, nothing logged, no answer touched. A spoken
@@ -192,6 +188,7 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
     progress,
     ask,
     stop,
+    retry,
     speak: move('speak'),
     transcribe: move('transcribe'),
     transcribed: move('transcribed'),

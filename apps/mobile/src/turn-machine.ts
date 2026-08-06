@@ -135,3 +135,24 @@ export function isVoiceTurn(state: TurnState): boolean {
     state === 'recording' || state === 'transcribing' || state === 'reviewing'
   );
 }
+
+/**
+ * Whether Try again is on offer (E8).
+ *
+ * A predicate rather than a `retry` event, and the reason is the photo. A retry
+ * is an ask of the same words, so it takes the edges `ask` and `upload` already
+ * provide: `failed + ask -> thinking` for a typed question, `failed + upload ->
+ * uploading` for one that carried a photo. That second edge is not optional —
+ * the photo goes out again as base64 in the body, and a screen saying "Thinking
+ * about your question" while several megabytes are still leaving the phone is
+ * the screen lying about where the turn is. So a `retry` event would have to be
+ * a pair of events, each duplicating one that exists.
+ *
+ * What the machine owes this feature is therefore not a transition but a
+ * boundary: retry is offered here, and nowhere else. The screen reads this and
+ * draws the button; `useTurn` reads it again before re-sending, because a tap
+ * and the state it was aimed at can disagree.
+ */
+export function canRetry(state: TurnState): boolean {
+  return state === 'failed';
+}

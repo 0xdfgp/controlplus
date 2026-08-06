@@ -130,11 +130,11 @@ const styles = StyleSheet.create({
     fontSize: theme.minimumBodyFontSize,
     lineHeight: 26,
     color: theme.colors.muted,
-    marginBottom: theme.spacing(2),
+    marginBottom: theme.spacing(1.5),
   },
   row: {
     flexDirection: 'row',
     gap: theme.spacing(2),
-    marginTop: theme.spacing(2),
+    marginTop: theme.spacing(1.5),
   },
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { appendTurn } from './conversation-log.ts';
+import { appendTurn, dropFailedTurn } from './conversation-log.ts';
 import type { LoggedTurn } from './conversation-log.ts';
 
 function turn(overrides: Partial<LoggedTurn> = {}): LoggedTurn {
@@ -73,6 +73,52 @@ describe('appendTurn', () => {
     const original: LoggedTurn[] = [turn({ question: 'first' })];
 
     appendTurn(original, turn({ question: 'second' }));
+
+    expect(original).toHaveLength(1);
+  });
+});
+
+describe('dropFailedTurn', () => {
+  const failed = turn({
+    question: 'Is this text about my bank a scam?',
+    answer: '',
+    state: 'failed',
+    errorMessage: 'Something went wrong on our side.',
+  });
+
+  it('takes the failed attempt off, so the retry replaces it', () => {
+    // Try again sends the same words again, so it is the same turn happening
+    // twice rather than two turns. Three failures then read as one question and
+    // one sentence, instead of the question repeating down the screen under three
+    // identical apologies.
+    const log = dropFailedTurn([turn({ question: 'earlier' }), failed]);
+
+    expect(log.map((t) => t.question)).toEqual(['earlier']);
+  });
+
+  it('leaves a turn that finished or was stopped exactly where it is', () => {
+    // The guarantee that matters. Retry is only reachable from `failed`, so the
+    // last turn always is the failed one — which is the kind of thing that stays
+    // true until something moves, and popping blindly would then eat an answer.
+    expect(dropFailedTurn([turn()])).toHaveLength(1);
+    expect(dropFailedTurn([turn({ state: 'stopped' })])).toHaveLength(1);
+  });
+
+  it('only ever drops the last turn, never an earlier failure', () => {
+    // An older failure the person has since asked past is part of what happened.
+    const log = dropFailedTurn([failed, turn({ question: 'answered since' })]);
+
+    expect(log.map((t) => t.state)).toEqual(['failed', 'idle']);
+  });
+
+  it('has nothing to do with an empty conversation', () => {
+    expect(dropFailedTurn([])).toEqual([]);
+  });
+
+  it('does not mutate the log it was given', () => {
+    const original: LoggedTurn[] = [failed];
+
+    dropFailedTurn(original);
 
     expect(original).toHaveLength(1);
   });

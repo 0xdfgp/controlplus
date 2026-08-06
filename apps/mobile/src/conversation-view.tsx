@@ -108,5 +108,5 @@ export function ConversationView({
 
 const styles = StyleSheet.create({
   region: { flex: 1 },
-  content: { paddingVertical: theme.spacing(2) },
+  content: { paddingVertical: theme.spacing(1) },
 });

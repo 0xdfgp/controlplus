@@ -66,12 +66,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: theme.spacing(2),
-    paddingVertical: theme.spacing(2),
+    paddingVertical: theme.spacing(1.5),
     fontSize: theme.bodyFontSize,
     color: theme.colors.text,
   },
   sendButton: {
-    marginTop: theme.spacing(2),
+    marginTop: theme.spacing(1.5),
     minHeight: theme.minimumTouchTarget,
     borderRadius: 14,
     backgroundColor: theme.colors.accent,
@@ -80,5 +80,7 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: { opacity: 0.45 },
   sendButtonPressed: { opacity: 0.8 },
-  sendLabel: { fontSize: 22, fontWeight: '700', color: '#FFFFFF' },
+  // The button keeps its 60pt height; only the lettering comes down, and only to
+  // 20pt, which is still above the body floor.
+  sendLabel: { fontSize: theme.bodyFontSize, fontWeight: '700', color: '#FFFFFF' },
 });

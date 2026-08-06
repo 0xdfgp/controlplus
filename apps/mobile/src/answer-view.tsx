@@ -128,8 +128,9 @@ export function AnswerView({
 
 const styles = StyleSheet.create({
   // Turns are separated by space rather than by a rule. A conversation of
-  // boxed-off exchanges reads as a form; this reads as a page.
-  turn: { marginBottom: theme.spacing(5) },
+  // boxed-off exchanges reads as a form; this reads as a page. Three steps and
+  // not five: at five the gap did more work than the words.
+  turn: { marginBottom: theme.spacing(3) },
   // Against the right edge, which is the one thing on this screen that is: it
   // is what makes the question read as the user's own without a label saying so.
   questionRow: { alignItems: 'flex-end' },
@@ -147,7 +148,7 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
   },
   stateLabel: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '600',
     color: theme.colors.text,
     marginTop: theme.spacing(2),
@@ -172,10 +173,10 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.tint,
     marginBottom: theme.spacing(2),
   },
-  // The answer is the thing on the screen: its own surface, the widest block,
-  // and the largest text.
+  // The answer is the thing on the screen: its own surface, the widest block and
+  // the largest text — 20pt, above 03's floor and scaling with the OS setting.
   answerCard: {
-    marginTop: theme.spacing(2),
+    marginTop: theme.spacing(1.5),
     marginRight: theme.spacing(3),
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
@@ -183,9 +184,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderBottomLeftRadius: 4,
     paddingHorizontal: theme.spacing(2),
-    paddingVertical: theme.spacing(2),
+    paddingVertical: theme.spacing(1.5),
   },
-  answer: { fontSize: 22, lineHeight: 32, color: theme.colors.text },
+  answer: { fontSize: theme.bodyFontSize, lineHeight: 28, color: theme.colors.text },
   // Lighter than an answer, by three things at once: the body floor rather than
   // answer size, the muted colour rather than full black, and no card behind it.
   // A turn that failed is information about the turn; it is not the answer, and

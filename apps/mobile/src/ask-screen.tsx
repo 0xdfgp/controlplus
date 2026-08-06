@@ -4,12 +4,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Composer } from './composer.tsx';
 import { ConversationView } from './conversation-view.tsx';
-import { DisclosurePill } from './disclosure-pill.tsx';
 import { FirstQuestion } from './first-question.tsx';
+import { FollowUp } from './follow-up.tsx';
+import { RetryButton } from './retry-button.tsx';
+import { ScreenHeader } from './screen-header.tsx';
 import { StopButton } from './stop-button.tsx';
 import { SupportFooter } from './support-footer.tsx';
 import { theme } from './theme.ts';
-import { isInFlight, isVoiceTurn } from './turn-machine.ts';
+import { canRetry, isInFlight, isVoiceTurn } from './turn-machine.ts';
 import { usePhoto } from './use-photo.ts';
 import { useTurn } from './use-turn.ts';
 import { useVoice } from './use-voice.ts';
@@ -18,6 +20,8 @@ import { VoiceTurn } from './voice-turn.tsx';
 export interface AskScreenProps {
   readonly baseUrl: string;
   readonly conversationId: string;
+  /** Starts a fresh conversation. Owned above, which is where the id is. */
+  readonly onNewConversation: () => void;
 }
 
 /**
@@ -36,14 +40,18 @@ export interface AskScreenProps {
  * composer while it is under way and nothing else — the conversation, if there
  * is one, stays exactly where it was.
  *
- * Two things sit outside both shapes, above and below everything: the AI
- * disclosure pill and the support line. Neither is inside a branch, and that is
- * the whole of how ADR-026's "persistent across every state" is kept true —
- * there is no state in which the code could draw the screen without them.
+ * A failed turn is the one exception to "the input is below". There it gives its
+ * place up to Try again — E8: one action, nothing beside it, nothing retyped.
+ *
+ * Two things sit outside every shape, above and below everything: the header
+ * carrying the AI disclosure, and the support line. Neither is inside a branch,
+ * and that is the whole of how ADR-026's "persistent across every state" is kept
+ * true — there is no state in which the code could draw the screen without them.
  */
 export function AskScreen({
   baseUrl,
   conversationId,
+  onNewConversation,
 }: AskScreenProps): React.JSX.Element {
   const [draft, setDraft] = useState('');
   const turn = useTurn(baseUrl, conversationId);
@@ -80,9 +88,13 @@ export function AskScreen({
   };
 
   const started = turn.history.length > 0 || turn.question.length > 0;
-  const canAsk = !isInFlight(turn.state);
+  const inFlight = isInFlight(turn.state);
+  const failed = canRetry(turn.state);
   const speaking = isVoiceTurn(turn.state);
   const notice = voice.message ?? photo.message;
+  // Nothing to clear before the first question, and nothing on offer mid-turn,
+  // which is what keeps it out of reach from the responding state.
+  const newConversation = started && !inFlight ? onNewConversation : null;
 
   const composer = (placeholder: string): React.JSX.Element => (
     <Composer
@@ -125,7 +137,7 @@ export function AskScreen({
             someone reading an answer. Dismissing the keyboard is handled where
             the taps land: keyboardShouldPersistTaps on the scroll regions. */}
         <View style={styles.body}>
-          <DisclosurePill />
+          <ScreenHeader onNewConversation={newConversation} />
 
           {started ? (
             <ConversationView
@@ -148,15 +160,18 @@ export function AskScreen({
             <StopButton onPress={turn.stop} />
           ) : null}
 
-          {/* A follow-up keeps the conversation visible above it. E4 and E6
-              draw an empty screen because they draw a first question; a spoken
-              follow-up must not blank the answer it is following up on. */}
-          {started && speaking ? (
-            <View style={styles.followUp}>{voicePanel}</View>
-          ) : null}
-
-          {started && canAsk ? (
-            <View style={styles.followUp}>{composer('Ask another question')}</View>
+          {/* A spoken follow-up keeps the conversation above it, unlike E4 and
+              E6, which are empty because they draw a first question. */}
+          {started && (speaking || !inFlight) ? (
+            <FollowUp>
+              {speaking ? (
+                voicePanel
+              ) : failed ? (
+                <RetryButton onPress={turn.retry} />
+              ) : (
+                composer('Ask another question')
+              )}
+            </FollowUp>
           ) : null}
         </View>
 
@@ -169,17 +184,4 @@ export function AskScreen({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.colors.background },
   body: { flex: 1, paddingHorizontal: theme.spacing(3) },
-  // The divider E7 draws: the conversation above, the way to ask again below.
-  //
-  // flexShrink 0 is what keeps the promise that the conversation gets the
-  // screen and the composer only what it needs. The conversation region above
-  // is flex 1, so it is the thing that gives way when the OS font is scaled up
-  // and these controls grow — rather than the composer being squeezed until a
-  // button is unreachable.
-  followUp: {
-    flexShrink: 0,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-    paddingTop: theme.spacing(2),
-  },
 });

@@ -46,3 +46,21 @@ export function appendTurn(
   }
   return [...log, turn];
 }
+
+/**
+ * The conversation without its last turn, when that turn failed.
+ *
+ * What Try again does to the screen. A retry sends the same words again, so it
+ * is the same turn happening a second time rather than a new one: the failed
+ * attempt comes off the log and the retry takes its place. Three failures then
+ * read as one question and one sentence, instead of the same question repeating
+ * down the screen under three identical apologies.
+ *
+ * The state is checked rather than assumed. Retry is only reachable from
+ * `failed`, so the last turn always is the failed one — which is exactly the
+ * kind of guarantee that is true until something moves, and a function that
+ * popped blindly would then be eating an answer.
+ */
+export function dropFailedTurn(log: readonly LoggedTurn[]): LoggedTurn[] {
+  return log[log.length - 1]?.state === 'failed' ? log.slice(0, -1) : [...log];
+}
