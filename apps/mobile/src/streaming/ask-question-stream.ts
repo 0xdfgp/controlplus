@@ -45,8 +45,10 @@ export interface AskQuestionStreamOptions {
  * chunks, which is why the parser takes an offset and why it is a pure function
  * tested separately.
  *
- * Returns a cancel function. It is not wired to any UI in this slice — stop is
- * S2 — but the transport already supports abandoning a turn.
+ * Returns a cancel function. It is how Stop is expressed (ADR-016): aborting
+ * the request is what the server detects. Cancelling is silent — no handler
+ * fires afterwards — because the caller asked for it and has nothing to learn
+ * from being told.
  */
 export function askQuestionStream(
   options: AskQuestionStreamOptions,
@@ -54,7 +56,24 @@ export function askQuestionStream(
 ): () => void {
   const xhr = new XMLHttpRequest();
   let offset = 0;
+  /** Whether onClose has been delivered. */
   let finished = false;
+  /**
+   * Whether we are the ones who closed the socket.
+   *
+   * An abort we asked for is not a transport failure, and there is no way to
+   * tell them apart after the fact: React Native's abort() calls `_reset()`,
+   * setting status to 0, then dispatches readystatechange at DONE
+   * synchronously from inside the abort call. That is byte for byte what a
+   * connection dying under us looks like.
+   *
+   * Without this flag, tapping Stop reports a transport error before the turn
+   * state machine has left `responding`, so the turn settles as failed and the
+   * user is shown the failure sentence and a Try again button in place of
+   * their own partial answer. The `stopped + fail` guard in turn-machine
+   * cannot help: the error arrives before `stopped`, not after.
+   */
+  let cancelled = false;
 
   const drain = (): void => {
     const { events, consumed } = parseSse(xhr.responseText, offset);
@@ -77,6 +96,11 @@ export function askQuestionStream(
   xhr.setRequestHeader('Accept', 'text/event-stream');
 
   xhr.onreadystatechange = (): void => {
+    // Before draining, not after: `_reset()` has already blanked the response,
+    // so there is nothing left to parse and an offset past its end to do it at.
+    if (cancelled) {
+      return;
+    }
     if (xhr.readyState === 3) {
       drain();
       return;
@@ -93,11 +117,17 @@ export function askQuestionStream(
   };
 
   xhr.onerror = (): void => {
+    if (cancelled) {
+      return;
+    }
     handlers.onTransportError();
     finish();
   };
 
   xhr.ontimeout = (): void => {
+    if (cancelled) {
+      return;
+    }
     handlers.onTransportError();
     finish();
   };
@@ -130,6 +160,9 @@ export function askQuestionStream(
   return () => {
     if (!finished) {
       finished = true;
+      // Set before the abort, never after: abort() re-enters the handlers
+      // above synchronously, so a flag raised afterwards is raised too late.
+      cancelled = true;
       xhr.abort();
     }
   };

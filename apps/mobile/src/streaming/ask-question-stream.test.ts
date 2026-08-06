@@ -50,8 +50,23 @@ class FakeXhr {
     this.sentBody = body;
   }
 
+  /**
+   * Abort the way React Native actually does it.
+   *
+   * Copied behaviour, not invention: RN's XMLHttpRequest.abort() calls
+   * `_reset()` — which sets `status` to 0 and blanks the response — and then
+   * `setReadyState(DONE)`, which dispatches `readystatechange` synchronously,
+   * from inside the abort call itself. See
+   * node_modules/react-native/Libraries/Network/XMLHttpRequest.js:654-672.
+   *
+   * A fake that only sets a flag makes the interesting case unreachable.
+   */
   abort(): void {
     this.aborted = true;
+    this.status = 0;
+    this.responseText = '';
+    this.readyState = READY_DONE;
+    this.onreadystatechange?.();
   }
 
   /** Grow the body the way RN does, then tick LOADING. */
@@ -78,10 +93,20 @@ afterEach(() => {
   FakeXhr.last = null;
 });
 
-function start(): { events: SseEvent[]; closed: boolean[]; xhr: FakeXhr } {
+interface Started {
+  events: SseEvent[];
+  closed: boolean[];
+  /** One entry per onTransportError call. */
+  errors: boolean[];
+  cancel: () => void;
+  xhr: FakeXhr;
+}
+
+function start(): Started {
   const events: SseEvent[] = [];
   const closed: boolean[] = [];
-  askQuestionStream(
+  const errors: boolean[] = [];
+  const cancel = askQuestionStream(
     {
       baseUrl: 'http://localhost:3000',
       conversationId: 'conv-1',
@@ -89,7 +114,7 @@ function start(): { events: SseEvent[]; closed: boolean[]; xhr: FakeXhr } {
     },
     {
       onEvent: (event) => events.push(event),
-      onTransportError: () => {},
+      onTransportError: () => errors.push(true),
       onClose: () => closed.push(true),
     },
   );
@@ -97,7 +122,7 @@ function start(): { events: SseEvent[]; closed: boolean[]; xhr: FakeXhr } {
   if (xhr === null) {
     throw new Error('the stream did not construct an XMLHttpRequest');
   }
-  return { events, closed, xhr };
+  return { events, closed, errors, cancel, xhr };
 }
 
 describe('askQuestionStream renders progressively', () => {
@@ -172,5 +197,61 @@ describe('askQuestionStream renders progressively', () => {
 
     expect(closed).toEqual([true]);
     expect(events).toHaveLength(1);
+  });
+});
+
+/**
+ * Stopping is not failing.
+ *
+ * The user tapping Stop is this cancel function, and RN's abort re-enters our
+ * own readystatechange handler with status 0 before it returns — which is
+ * indistinguishable from a connection that died, unless the transport
+ * remembers that it was the one that closed the socket. It has to, because
+ * everything downstream hangs off the difference: a turn reported as a
+ * transport failure gets the failure sentence and a Try again button, in place
+ * of E7's neutral Stopped label over the partial answer the user chose to keep.
+ */
+describe('askQuestionStream cancellation', () => {
+  it('reports no transport error when the caller cancels', () => {
+    const { errors, cancel, xhr } = start();
+
+    xhr.deliver(frame('stage', { type: 'stage', stage: 'responding' }));
+    xhr.deliver(frame('message.delta', { type: 'message.delta', text: 'That ' }));
+
+    cancel();
+
+    expect(xhr.aborted).toBe(true);
+    // The caller asked for this. Telling it something went wrong is the bug.
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps the words that arrived before the cancel', () => {
+    const { events, cancel, xhr } = start();
+
+    xhr.deliver(frame('stage', { type: 'stage', stage: 'responding' }));
+    xhr.deliver(frame('message.delta', { type: 'message.delta', text: 'That ' }));
+    xhr.deliver(frame('message.delta', { type: 'message.delta', text: 'message ' }));
+
+    cancel();
+
+    const texts = events
+      .filter((event) => event.type === 'message.delta')
+      .map((event) => event.text);
+    expect(texts).toEqual(['That ', 'message ']);
+  });
+
+  it('stays silent when a dead connection is reported after a cancel', () => {
+    const { errors, closed, cancel, xhr } = start();
+
+    xhr.deliver(frame('message.delta', { type: 'message.delta', text: 'a' }));
+    cancel();
+
+    // Some platforms follow the abort with an error of their own. The turn is
+    // already over; it must not be reopened as a fault.
+    xhr.onerror?.();
+    xhr.ontimeout?.();
+
+    expect(errors).toEqual([]);
+    expect(closed).toEqual([]);
   });
 });

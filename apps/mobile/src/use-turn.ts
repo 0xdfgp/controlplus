@@ -137,14 +137,17 @@ export function useTurn(baseUrl: string, conversationId: string): Turn {
    * detects (ADR-016), and nothing comes back over a connection we just closed,
    * so waiting for confirmation would mean waiting forever. The words already
    * on screen stay exactly where they are.
+   *
+   * Settle first, abort second, on purpose: closing a socket can report a
+   * failure on the way out, and `stopped + fail` is refused only from `stopped`.
    */
   const stop = useCallback(() => {
     if (transition(now(), 'stop') === null) {
       return;
     }
+    settle('stop', null);
     cancel.current?.();
     cancel.current = null;
-    settle('stop', null);
   }, [now, settle]);
 
   /**
