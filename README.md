@@ -1,146 +1,93 @@
-# Control+
+# Control+ companion
 
-A conversational assistant for people aged 70 to 85. Many arrive frightened,
-because they think someone is trying to cheat them.
+A conversational assistant for Control+, an anti-scam and device security
+product for older adults in the US. Built in one working day.
 
-This repository is at slice **S1: ask a typed question, get a streamed answer**.
+An iOS and Android app where someone can ask a technology support question by
+typing, by photo, or by voice, and get an answer that streams back and can be
+stopped. A Node and TypeScript backend behind it, hexagonal, with the layer
+boundaries enforced by a build that fails rather than by discipline.
 
-## What works today
+## Running it
 
-Type a question, watch the answer appear as it is written, and have the turn
-recorded with the model and provider that produced it and what it cost in
-tokens. Nothing else. See `docs/briefs/S1-alpine.md` for what is deliberately
-absent and which slice it belongs to.
+You need Node 20 or later, Docker, and an Xcode or Android toolchain if you
+want to run the app on a device. Everything else installs with npm.
 
-## Requirements
-
-- Node 22 or newer (developed on 25.6.1)
-- Docker, running
-- Xcode, for the iOS build
-- An Anthropic API key
-
-## Getting it running
-
-```bash
-# 1. Your provider key. The API refuses to start without it.
-echo "ANTHROPIC_API_KEY=sk-ant-your-key-here" > .env
-
-# 2. Dependencies.
+```
 npm install
-
-# 3. Postgres 16, and nothing else.
-npm run db:up
-
-# 4. Schema.
+cp .env.example .env      # then fill in the keys, see below
+npm run db:up             # Postgres 16 in Docker, nothing else
 npm run db:migrate
-
-# 5. The API, on http://localhost:3000
-npm run api
+npm run api               # backend on http://localhost:3000
+npm run mobile            # Expo dev server, then press i for iOS
 ```
 
-Then, in a second terminal:
+The app needs a development build rather than Expo Go, because it uses native
+modules for the camera and the microphone. If you have not built it before,
+`npx expo run:ios` from `apps/mobile` will do it once and then `npm run
+mobile` is enough.
 
-```bash
-# The Expo development build. Not Expo Go.
-npm run mobile
-```
+### Environment
 
-The first mobile run needs a native build: `npm run ios --workspace
-@control-plus/mobile`. After that, `npm run mobile` attaches to it.
+| Variable | What it is |
+|---|---|
+| `ANTHROPIC_API_KEY` | Required. The API fails at boot without it, or if it does not start with `sk-ant-`. |
+| `ANTHROPIC_MODEL` | Optional. Defaults to `claude-sonnet-4-5`. |
+| `DATABASE_URL` | Postgres connection string. The default in `.env.example` matches the Docker compose file. |
+| `GEMINI_API_KEY` | Optional. The Gemini adapter is in the tree as a second implementation of the provider port but is not wired. |
 
-On the iOS Simulator the app reaches the API on `localhost`. On a physical
-device it uses the host running Metro. Override either with
-`EXPO_PUBLIC_API_URL`.
+A missing or malformed key fails at startup with a message naming the
+variable, rather than on the first user request. A well-formed but revoked key
+cannot be detected without calling the provider, so that one fails on the
+first question instead.
 
 ## Tests
 
-```bash
+```
 npm test
 ```
 
-That runs, in order: the layer boundary lint, ESLint, TypeScript across all
-three workspaces, and the test suite.
+That runs, in order: the boundary lint, ESLint, a typecheck across all three
+workspaces, and the unit and integration suites. The database needs to be up,
+because the persistence tests run against real Postgres rather than a fake.
 
-The persistence and end-to-end suites talk to the real Postgres from
-`docker-compose.yml` rather than a fake, so **`npm run db:up` is a prerequisite**.
-They are not skipped when the database is missing; they fail, because a
-persistence suite that passes without a database proves nothing.
+The boundary lint is worth running on its own:
 
-The provider is stubbed everywhere in the suite. No test makes a network call.
+```
+npm run lint:boundaries
+```
 
-### Configuration
-
-| Variable | Default | Required |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | — | Yes. The API exits at startup if it is missing or does not start with `sk-ant-`. |
-| `DATABASE_URL` | `postgres://controlplus:controlplus@localhost:5433/controlplus` | No |
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-5` | No |
-| `GEMINI_API_KEY` | — | No. The Gemini adapter is the second implementation of the port and is not wired (ADR-032). |
-| `GEMINI_MODEL` | `gemini-3.5-flash` | No |
-| `PORT` | `3000` | No |
-| `LOG_LEVEL` | `info` | No |
-
-Configuration is validated at boot. A missing key fails at startup, not on the
-first user request — the person this is built for should never be the one who
-discovers the server was misconfigured.
+It fails the build if anything under `domain/` imports from `application/` or
+`infrastructure/`, or from a package outside its allowlist. The claim that
+this codebase is hexagonal is backed by that command rather than by a diagram.
 
 ## Layout
 
 ```
-apps/api/src/domain/          entities, value objects, events, ports, policy
-apps/api/src/application/     use cases
-apps/api/src/infrastructure/  HTTP, Gemini, Postgres, logging, composition root
-apps/mobile/                  Expo app, one screen
-packages/contracts/           the request type and the SSE event union
+apps/api            the backend: domain, application, infrastructure
+apps/mobile         the React Native app
+apps/eval           the provider evaluation harness and its fixtures
+packages/contracts  the HTTP and SSE types both sides import
+docs/               everything written down
 ```
 
-`domain/` imports nothing from `application/` or `infrastructure/`. That is not
-a convention, it is enforced: see below.
+## The written parts
 
-## The guard rails
+| | |
+|---|---|
+| `docs/architecture.md` | How it is put together and why. The shorter read. |
+| `docs/decisions/decision-log.md` | The full record. Every decision closed during the build, the ones reversed, the corrections I made to the assistant, and the problems verification found. |
+| `docs/provider-comparison.md` | Four candidates over four fixture questions, with latency, tokens and cost, and a routing recommendation. |
+| `docs/production-readiness.md` | What would break if this shipped as it stands, and the order I would fix it in. |
+| `docs/left-out.md` | What was cut, why deferring it is safe, and what keeps the door open. |
+| `docs/ai-tooling.md` | How the work was split between two agents, plus the three examples the brief asks for: a suggestion I rejected, a problem testing found, and a decision I made myself. |
+| `docs/extending.md` | How video attachments and realtime voice would be added: one is additive, the other is a second product path. |
+| `docs/briefs/` | The implementation briefs. Every slice was written as a brief and executed against it, which is why they are here rather than in a notebook. |
 
-Four files enforce the architecture, and they are not edited after S1:
+`.claude/` and the root `CLAUDE.md` are the instructions the coding agent ran
+under. They are committed deliberately: `docs/ai-tooling.md` explains how the
+work was split between an agent that made decisions and one that wrote code,
+and this is that split in its actual form.
 
-- `.dependency-cruiser.js` — the layer rules, every one at error severity
-- `eslint.config.mjs` — one class per file, 200 line cap on source, no `any`
-  under `domain/`
-- `.claude/settings.json` — hooks that block a forbidden import as it is typed
-- `.claude/rules/` — the rules an agent reads before touching those paths
-
-`npm run lint:boundaries` drives dependency-cruiser through its API rather than
-its CLI, because the CLI refuses to run on odd-numbered Node releases. The rules
-are unchanged; only the runner differs.
-
-## API
-
-`POST /conversations/:conversationId/messages`
-
-```json
-{ "question": "Is this text about my bank a scam?" }
-```
-
-Responds `text/event-stream`, one request per turn:
-
-```
-event: stage          data: {"type":"stage","stage":"thinking"}
-event: stage          data: {"type":"stage","stage":"responding"}
-event: message.delta  data: {"type":"message.delta","text":"That message "}
-event: message.done   data: {"type":"message.done","messageId":"…","state":"completed",…}
-```
-
-On failure, `stage(thinking)` is followed by
-`event: error  data: {"type":"error","error":"ProviderUnavailable"}`, and no
-assistant message row is written.
-
-The conversation id is generated on the device and the API creates the
-conversation on first use, so a turn is a single request. That is what lets the
-thinking label reach the screen inside 500ms of the tap.
-
-## Logging
-
-One structured line per turn, carrying conversation id, request id, latency,
-token usage and error class. Message content passes through a redaction
-function that **masks** emails, phone numbers and card-shaped digit sequences —
-it never omits them. An operator needs to see that a card number was in the
-question; that is often the whole story with a scam. Writing the number down
-would copy the harm.
+The evaluation results, including every answer and every judge verdict, are in
+`apps/eval/results/` so any number in the comparison can be checked.
