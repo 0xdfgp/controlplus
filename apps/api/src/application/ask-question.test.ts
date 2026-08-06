@@ -23,6 +23,7 @@ import {
   STOPPED_ANSWER_NOTICE,
 } from '../domain/policy/conversation-context.ts';
 import { ProductPolicy } from '../domain/policy/product-policy.ts';
+import { MAX_MESSAGES_PER_CONVERSATION } from '../domain/policy/turn-limit-policy.ts';
 import type { TextGenerationPort } from '../domain/ports/text-generation-port.ts';
 import { AnswerGeneration } from '../domain/services/answer-generation.ts';
 import { ConversationId } from '../domain/value-objects/conversation-id.ts';
@@ -590,6 +591,102 @@ describe('AskQuestion, a photo over the limit (AC4)', () => {
 
     expect(messages.saved).toHaveLength(0);
     expect(conversations.saved).toHaveLength(0);
+  });
+});
+
+describe('AskQuestion, a conversation at its limit (ADR-034)', () => {
+  const port = () =>
+    new ScriptedTextGeneration([
+      { kind: 'text', text: 'Open Settings.' },
+      completionChunk(),
+    ]);
+
+  /**
+   * Fills the conversation to exactly the limit.
+   *
+   * Two messages a turn, the question and the answer, so the arithmetic is the
+   * policy's own rather than a number written twice. Driven through the use case
+   * rather than by pushing rows into the fake, because what is being tested is
+   * that the count the use case reads is the count the writes produced.
+   */
+  async function fillToLimit(useCase: AskQuestion): Promise<void> {
+    for (let turn = 0; turn < MAX_MESSAGES_PER_CONVERSATION / 2; turn += 1) {
+      await collect(
+        useCase.execute({ conversationId, question: `question ${turn}` }),
+      );
+    }
+  }
+
+  it('answers the turn that lands exactly on the limit', async () => {
+    // The boundary from the allowed side. A cap that fires one turn early is
+    // still a bug, and to this audience it is an app that stopped working.
+    const { useCase, messages } = build(port());
+
+    await fillToLimit(useCase);
+
+    expect(messages.saved).toHaveLength(MAX_MESSAGES_PER_CONVERSATION);
+    expect(messages.assistantMessages().at(-1)?.state).toBe('completed');
+  });
+
+  it('fails the next turn naming ConversationTurnLimitReached', async () => {
+    const { useCase } = build(port());
+    await fillToLimit(useCase);
+
+    const events = await collect(
+      useCase.execute({ conversationId, question: 'one question too many' }),
+    );
+
+    expect(events.map((e) => e.kind)).toEqual(['failed']);
+    const failed = events[0];
+    if (failed?.kind !== 'failed') {
+      throw new Error('expected a failed event');
+    }
+    expect(failed.event.errorClass).toBe('ConversationTurnLimitReached');
+    expect(failed.event.conversationId.value).toBe('conv-1');
+  });
+
+  it('never reaches the provider, which is the whole point of the cap', async () => {
+    const scripted = port();
+    const { useCase } = build(scripted);
+    await fillToLimit(useCase);
+    const before = scripted.seenRequests.length;
+
+    await collect(
+      useCase.execute({ conversationId, question: 'one question too many' }),
+    );
+
+    // Not "fewer requests" — none. A refused turn that still pays for a
+    // generation would be a cap that costs money to enforce.
+    expect(scripted.seenRequests).toHaveLength(before);
+  });
+
+  it('writes nothing for the refused turn', async () => {
+    const { useCase, messages } = build(port());
+    await fillToLimit(useCase);
+
+    await collect(
+      useCase.execute({ conversationId, question: 'one question too many' }),
+    );
+
+    expect(messages.saved).toHaveLength(MAX_MESSAGES_PER_CONVERSATION);
+  });
+
+  it('leaves a different conversation alone', async () => {
+    // The cap is per conversation. This is also the honest limit ADR-034
+    // records: a caller who changes the id never meets it.
+    const { useCase, messages } = build(port());
+    await fillToLimit(useCase);
+
+    await collect(
+      useCase.execute({
+        conversationId: ConversationId.fromString('conv-2'),
+        question: 'Is this text from my bank real?',
+      }),
+    );
+
+    expect(
+      messages.saved.filter((m) => m.conversationId.value === 'conv-2'),
+    ).toHaveLength(2);
   });
 });
 

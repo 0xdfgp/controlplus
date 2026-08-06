@@ -52,6 +52,20 @@ export class InMemoryMessageRepository implements MessageRepository {
       .slice(-limit);
   }
 
+  /**
+   * Set to make the count fail, which is the database being unreachable at the
+   * moment the conversation limit is being checked.
+   */
+  countFailure: Error | null = null;
+
+  async countByConversation(conversationId: ConversationId): Promise<number> {
+    if (this.countFailure !== null) {
+      throw this.countFailure;
+    }
+    return this.saved.filter((m) => m.conversationId.equals(conversationId))
+      .length;
+  }
+
   assistantMessages(): Message[] {
     return this.saved.filter((m) => m.isFromAssistant());
   }

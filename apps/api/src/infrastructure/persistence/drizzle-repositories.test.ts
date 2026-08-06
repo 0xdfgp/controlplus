@@ -399,6 +399,47 @@ describe('DrizzleMessageRepository', () => {
     expect(recent.map((m) => m.text())).toEqual(['only question']);
   });
 
+  it('counts the messages of one conversation and not another (ADR-034)', async () => {
+    const conversationId = nextConversationId();
+    const other = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+    await conversations.save(Conversation.start(other, createdAt));
+
+    for (let index = 0; index < 3; index += 1) {
+      await messages.save(
+        Message.fromUser({
+          id: MessageId.fromString(`test-msg-c${index}-${counter}`),
+          conversationId,
+          parts: [TextPart.of(`question ${index}`)],
+          createdAt: new Date(createdAt.getTime() + index * 1000),
+        }),
+      );
+    }
+    await messages.save(
+      Message.fromUser({
+        id: MessageId.fromString(`test-msg-c-other-${counter}`),
+        conversationId: other,
+        parts: [TextPart.of('a question in another conversation')],
+        createdAt,
+      }),
+    );
+
+    // A number, not a string. Postgres counts in bigint, which node-postgres
+    // hands back as a string because it does not fit a JS number in general —
+    // and `'3' >= 40` is false for every conversation that will ever exist, so
+    // an unparsed count is a limit that silently never fires.
+    const total = await messages.countByConversation(conversationId);
+    expect(total).toBe(3);
+    expect(typeof total).toBe('number');
+  });
+
+  it('counts an empty conversation as zero rather than failing', async () => {
+    const conversationId = nextConversationId();
+    await conversations.save(Conversation.start(conversationId, createdAt));
+
+    expect(await messages.countByConversation(conversationId)).toBe(0);
+  });
+
   it('returns nothing for a conversation with no messages', async () => {
     const conversationId = nextConversationId();
     await conversations.save(Conversation.start(conversationId, createdAt));

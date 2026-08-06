@@ -50,11 +50,17 @@ export interface UsagePayload {
  * AttachmentTooLarge is the photo rule from ADR-024. The class travels, never
  * the limit and never a byte count: the app turns it into one plain sentence,
  * and a number of megabytes is a technical term to the person reading it.
+ *
+ * ConversationTurnLimitReached is the conversation ceiling from ADR-034, and the
+ * same rule applies to it twice over — neither the count nor the limit crosses.
+ * It is the one class where sending the same question again cannot succeed, so
+ * the app answers it with a way forward rather than with Try again.
  */
 export type StreamErrorClass =
   | 'ProviderUnavailable'
   | 'ConversationNotFound'
-  | 'AttachmentTooLarge';
+  | 'AttachmentTooLarge'
+  | 'ConversationTurnLimitReached';
 
 export interface StageEvent {
   readonly type: 'stage';

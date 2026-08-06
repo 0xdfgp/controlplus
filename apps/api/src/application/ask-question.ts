@@ -2,7 +2,6 @@ import { Conversation } from '../domain/entities/conversation.ts';
 import { Message } from '../domain/entities/message.ts';
 import { GenerationFailed } from '../domain/events/generation-failed.ts';
 import type { MessageCompleted } from '../domain/events/message-completed.ts';
-import { assertWithinAttachmentLimit } from '../domain/policy/attachment-policy.ts';
 import { CONTEXT_WINDOW_MESSAGES } from '../domain/policy/conversation-context.ts';
 import type { Clock } from '../domain/ports/clock.ts';
 import type { ConversationRepository } from '../domain/ports/conversation-repository.ts';
@@ -13,6 +12,7 @@ import type {
   AnswerGenerationEvent,
 } from '../domain/services/answer-generation.ts';
 import type { ConversationId } from '../domain/value-objects/conversation-id.ts';
+import { assertTurnMayHappen } from './turn-admission.ts';
 import { toUserMessageParts } from './user-message.ts';
 import type { AskQuestionImage } from './user-message.ts';
 
@@ -71,15 +71,17 @@ export class AskQuestion {
     input: AskQuestionInput,
   ): AsyncGenerator<AskQuestionEvent, void, undefined> {
     // Before the conversation is touched, because a photo that cannot be sent
-    // is not a turn that happened. Nothing is written, no provider is called,
-    // and the user is told in one plain sentence (ADR-024).
-    if (input.image !== undefined) {
-      try {
-        assertWithinAttachmentLimit(input.image.byteSize);
-      } catch (caught) {
-        yield this.failure(input.conversationId, caught);
-        return;
-      }
+    // and a conversation that has run its length are not turns that happened
+    // (ADR-024, ADR-034).
+    try {
+      await assertTurnMayHappen(
+        this.messages,
+        input.conversationId,
+        input.image,
+      );
+    } catch (caught) {
+      yield this.failure(input.conversationId, caught);
+      return;
     }
 
     const conversation = await this.loadOrStart(input.conversationId);

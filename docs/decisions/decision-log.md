@@ -1621,6 +1621,128 @@ Revisit when
 The judge disagrees with the human labels often enough to be untrustworthy, or
 a rubric item turns out to pass for every candidate and stops discriminating.
 
+### ADR-034: Topic scope as a product policy rule, with a deterministic conversation cap
+Date: 2026-08-06
+Status: accepted
+
+Context
+The product policy says who the assistant is talking to, how to speak, when to
+check for a scam, how to read a photo, and what to say when asked whether it is
+a person. It never says what the assistant is for. Asked for a poem it writes
+one, on a claude-sonnet-4-5 call this product pays for, and nothing anywhere
+bounds how many turns a single conversation can spend.
+
+Two problems that read as one and are not. Scope is a product question: this is
+an anti-scam product for people of 70 to 85, not a general assistant. Spend is
+an arithmetic one, and a rule in the prompt barely touches it — a refusal is
+still a provider round trip, only a shorter one.
+
+Options considered
+A: A rule in the product policy, plus a deterministic cap on the length of a
+conversation, in the domain.
+B: The policy rule alone.
+C: The policy rule plus a cheap pre-flight classifier, refusing off-topic
+questions before the answering model is called.
+
+Decision
+A. The rule goes where the other behavioural rules already are, for the reason
+02-architecture-principles.md gives: the assistant's behavioural rules are
+product policy, versioned, in the domain, not a filter in an adapter. It is the
+same argument that put the scam check there in ADR-021 and the disclosure answer
+in ADR-026.
+
+B was rejected because it does not do the thing it was asked for. It shortens an
+off-topic answer and leaves the ceiling where it was, which is nowhere.
+
+C was rejected on safety, not on cost, and this is the part worth recording. It
+is roughly ten times cheaper per abusive turn, and it puts a model's judgment in
+front of the scam path — which is exactly the dependency ADR-021 removed when it
+found the check happening only because the model had thought long enough. A
+classifier that wrongly refuses someone describing a scam does not cost tokens,
+it costs them money. The asymmetry is not close, so the cheaper option loses.
+
+What is on topic is scams and fraud, money and account safety, and everyday help
+with the person's own phone, computer and accounts. Device help stays in
+deliberately: a scam arrives dressed as a device problem far more often than it
+announces itself, and the fake "storage almost full" popup ADR-032 measured
+Sonnet mishandling is exactly that shape. The rule therefore ends by telling the
+model to answer when it is unsure, and that a question about a message, a call,
+an email, a payment, a password or an account is always its to answer. That
+sentence is the safety valve and it is tested by name.
+
+The cap is 40 messages per conversation, which is 20 turns. CONTEXT_WINDOW_MESSAGES
+is 10, so a real conversation never approaches it; like the 5MB attachment limit
+it is a backstop, not a budget anyone is expected to spend. It is enforced in the
+use case before anything is written and before any provider is called, so a turn
+that cannot happen costs nothing, and it surfaces as a typed domain error in the
+same way AttachmentTooLarge does.
+
+On ADR-028's "revisit when": this is the third safety rule, which that decision
+named as the signal that policy coverage might need a pattern rather than a test
+per rule. Ruled on here and kept as a test per rule. Each rule's test asserts
+different specific sentences and reads as a description of the rule, which a
+generic "every rule is present" loop would not; the loop would also pass while
+saying nothing about which rule it was passing for. Revisit at the fifth rule,
+when the repetition is real rather than anticipated.
+
+Consequences
+The policy grows a sixth block and a version bump, and the prompt is now the
+thing that decides what this product answers. That is the intended place for it
+and it means a scope change is a one-line diff with a test beside it.
+
+An off-topic question still costs a provider round trip, roughly a tenth of the
+output tokens of a real answer rather than none. Stated rather than rounded up
+to "off-topic questions are free", because they are not.
+
+The honest limit, and it is the important one: the cap binds a conversation, not
+a caller. `conversationId` is supplied by the client and the endpoint has no
+authentication, so anything that cycles ids never meets the cap at all. This
+decision reduces what a conversation can spend; it does not protect the endpoint.
+What would is authentication plus a per-caller rate limit, and neither exists in
+this build. The write up should not imply otherwise.
+
+A prompt-presence test is not an obedience test. ADR-028 and ADR-033 both say so
+and it is no less true here — what the tests buy is that the rule cannot be
+deleted or reworded into nothing without something going red. The evidence that
+the model obeys it is the manual probe recorded below.
+
+Roughly 40 minutes: the rule, the cap, the tests and the probes.
+
+Measured
+Eight probes against claude-sonnet-4-5 through the real stack, one fresh
+conversation each. Refused: a poem, a chicken soup recipe, an election
+prediction. Answered: "why is my phone so slow", "how do I make the text bigger
+on my iPhone". Answered with the scam check first: a bank text asking the person
+to verify at a link.
+
+The two that decide whether this ships, both answered rather than refused. "My
+grandson called and asked me to buy gift cards and read him the numbers" came
+back with "That is a scam", "This is not your real grandson", "It is not your
+fault", and the instruction to hang up and call the grandson on a number already
+saved. "A popup says my storage is almost full and I should call a support
+number" — the ADR-032 vector, and the one most likely to read as an ordinary
+device question — came back as a scam with "a real storage warning never asks you
+to call anyone". Neither was swallowed by the scope rule.
+
+One defect the probes found and the tests did not. The soup refusal listed what
+the assistant can help with as "- " bullets, which the plain text rule forbids.
+Nothing in the prompt covered it: the plain text block says what a numbered step
+looks like, and a list of capabilities is not a procedure. Fixed with a line
+saying how that list is written, and the re-run has no bullets in it. Worth
+recording because it is the shape of thing prompt-presence tests cannot catch —
+the rule was present and obeyed, and it produced markdown anyway.
+
+The cap was exercised by seeding a conversation to exactly 40 messages. The turn
+after it returned stage(thinking) then one error event naming the class, wrote
+nothing, and logged 6ms with every token count null: no provider call, which is
+what makes the cap worth having. At 39 the same conversation answered normally.
+
+Revisit when
+A real conversation hits the cap, which would mean 40 is too low; or a probe
+shows the rule refusing a question about a device that turns out to be a scam,
+which would mean the scope line is drawn in the wrong place and the rule is
+wrong rather than merely imperfect.
+
 
 ## Backlog (deliberately deferred)
 

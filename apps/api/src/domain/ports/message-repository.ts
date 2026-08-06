@@ -24,4 +24,13 @@ export interface MessageRepository {
     conversationId: ConversationId,
     limit: number,
   ): Promise<Message[]>;
+  /**
+   * How many messages the conversation holds.
+   *
+   * A count rather than the messages, because the caller is deciding whether one
+   * more turn is allowed (ADR-034) and reading the conversation to answer that
+   * is the thing every other bound here exists to avoid. What the number is
+   * compared against is a domain rule; the repository does not know it.
+   */
+  countByConversation(conversationId: ConversationId): Promise<number>;
 }

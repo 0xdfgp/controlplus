@@ -21,6 +21,7 @@ const KNOWN_ERROR_CLASSES: readonly StreamErrorClass[] = [
   'ProviderUnavailable',
   'ConversationNotFound',
   'AttachmentTooLarge',
+  'ConversationTurnLimitReached',
 ];
 
 function toStreamErrorClass(name: string): StreamErrorClass {

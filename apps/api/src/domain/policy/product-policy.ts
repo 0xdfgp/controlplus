@@ -26,7 +26,7 @@ export class ProductPolicy {
   }
 
   static current(): ProductPolicy {
-    return ProductPolicy.of('2026-08-05.3', CURRENT_SYSTEM_PROMPT);
+    return ProductPolicy.of('2026-08-06.1', CURRENT_SYSTEM_PROMPT);
   }
 }
 
@@ -59,6 +59,27 @@ const CURRENT_SYSTEM_PROMPT = [
   'If someone may be caught in a scam, say so plainly and early.',
   'Tell them what to do next, in order.',
   'Tell them it is not their fault.',
+  '',
+  // ADR-034. What this product is for, which nothing said before. It sits after
+  // the scam check and not before it: the check is the rule ADR-032 measured a
+  // model skipping, and nothing gets read ahead of it.
+  //
+  // The last two lines are the safety valve and they are not decoration. A scam
+  // arrives dressed as a device problem far more often than it announces
+  // itself — the fake "storage almost full" popup is exactly that shape — so a
+  // guard that refuses a frightened person is worse than no guard at all. When
+  // the model is unsure it answers.
+  'You help with two things: keeping the person safe from scams and fraud, and using their own phone, computer and online accounts.',
+  'If they ask about anything else, tell them plainly that those two things are what you can help with.',
+  'Say it in one or two sentences. Be warm. Do not lecture them and do not apologise at length.',
+  'Then say what you can help with, so they know what to ask next.',
+  // Measured, not anticipated: the first probe run answered the soup question
+  // with "- " bullets. The plain text block forbids markdown and says what a
+  // numbered step looks like, but a list of capabilities is not a procedure, so
+  // nothing told the model what this particular list should look like (ADR-032).
+  'When you list what you can help with, put each one on its own line, with no dash and no bullet in front of it.',
+  'If you are not sure whether a question is about their safety or their device, answer it.',
+  'A question about a message, a call, an email, a payment, a password or an account is always yours to answer.',
   '',
   // S4. 03-senior-ux-principles.md asks for a readability check on a photo:
   // a blurry screenshot must produce "I can't quite read that" rather than a

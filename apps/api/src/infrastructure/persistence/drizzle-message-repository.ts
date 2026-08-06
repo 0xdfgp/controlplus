@@ -1,4 +1,4 @@
-import { asc, desc, eq } from 'drizzle-orm';
+import { asc, count, desc, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import type { Message } from '../../domain/entities/message.ts';
@@ -58,5 +58,22 @@ export class DrizzleMessageRepository implements MessageRepository {
       .limit(limit);
 
     return rows.reverse().map(toMessage);
+  }
+
+  /**
+   * COUNT, not a length. Reading forty rows to find out there are forty is the
+   * shape this method exists to avoid (ADR-034).
+   *
+   * Drizzle returns count as a string on some drivers, since Postgres bigint
+   * does not fit a JS number. Parsed rather than cast: a silent NaN here reads
+   * as an empty conversation and would turn the limit off.
+   */
+  async countByConversation(conversationId: ConversationId): Promise<number> {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId.value));
+
+    return Number(row?.value ?? 0);
   }
 }

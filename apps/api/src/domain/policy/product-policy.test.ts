@@ -81,6 +81,63 @@ describe('ProductPolicy, safety rules', () => {
     });
   });
 
+  describe('topic scope (ADR-034)', () => {
+    it('names the two things the assistant is for', () => {
+      expect(prompt).toContain(
+        'You help with two things: keeping the person safe from scams and fraud, and using their own phone, computer and online accounts.',
+      );
+    });
+
+    it('asks for a short, warm refusal rather than a lecture', () => {
+      expect(prompt).toContain(
+        'If they ask about anything else, tell them plainly that those two things are what you can help with.',
+      );
+      expect(prompt).toContain(
+        'Say it in one or two sentences. Be warm. Do not lecture them and do not apologise at length.',
+      );
+    });
+
+    it('leaves the person with something to ask next', () => {
+      // A refusal that ends at "no" tells someone of 80 that they used the
+      // wrong app, not that they asked the wrong question.
+      expect(prompt).toContain(
+        'Then say what you can help with, so they know what to ask next.',
+      );
+    });
+
+    it('says how to write the list of what it can help with', () => {
+      // A regression guard on a measured failure, not a precaution: the first
+      // probe run answered an off-topic question with "- " bullets, which the
+      // plain text rule forbids and which nothing else in the prompt covered,
+      // because a list of capabilities is not a procedure (ADR-032, ADR-034).
+      expect(prompt).toContain(
+        'When you list what you can help with, put each one on its own line, with no dash and no bullet in front of it.',
+      );
+    });
+
+    it('resolves an unsure case by answering, not by refusing', () => {
+      // The safety valve, and the reason this rule is safe to ship at all. A
+      // scam arrives dressed as a device problem more often than it announces
+      // itself, so the failure this guards against is not an off-topic answer
+      // slipping through — it is a frightened person being turned away.
+      expect(prompt).toContain(
+        'If you are not sure whether a question is about their safety or their device, answer it.',
+      );
+      expect(prompt).toContain(
+        'A question about a message, a call, an email, a payment, a password or an account is always yours to answer.',
+      );
+    });
+
+    it('keeps the scam check ahead of the scope rule', () => {
+      // Order is load-bearing: ADR-032 measured a model skipping the scam
+      // check, and a rule about what not to answer must not be read before the
+      // rule about what to check first.
+      expect(prompt.indexOf('decide whether it could be a scam')).toBeLessThan(
+        prompt.indexOf('You help with two things:'),
+      );
+    });
+  });
+
   describe('photos (S4, 03-senior-ux-principles)', () => {
     it('requires the model to read the photo before answering', () => {
       expect(prompt).toContain(
@@ -124,6 +181,6 @@ describe('ProductPolicy, safety rules', () => {
   });
 
   it('carries a version, so a stored answer is readable against what produced it', () => {
-    expect(ProductPolicy.current().version).toBe('2026-08-05.3');
+    expect(ProductPolicy.current().version).toBe('2026-08-06.1');
   });
 });
