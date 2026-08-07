@@ -1,111 +1,134 @@
 # What I left out, and why
 
-Everything here was a decision rather than an oversight. Each one has a note on
-why deferring it is safe and what keeps the door open.
+None of this got forgotten. Each one was a decision. Below each I have said
+what makes it safe to leave and what keeps the door open.
 
-## Cut on the night, in priority order
+## Cut on the night
 
-Five slices were planned above the cut line and not built. The order they were
-dropped in reflects what the brief protects most: the three input modes and the
-provider comparison came first, and these went.
+Five slices sat above the cut line and never got built. They went in this
+order, because the brief protects the three input modes and the provider
+comparison ahead of everything else.
 
-**The Control+ user context port.** Designed in full, contract and degradation
-included, and not built. The assistant therefore answers without knowing
-anything about the account, which is the single thing that would most change
-what a good answer looks like in this product. If one slice were added back
-first, this is it.
+### The Control+ user context port
 
-**The conversation cost endpoint.** Usage is captured on every message,
-including thinking tokens, and the pricing catalogue exists in the domain and
-keys correctly on the model snapshot the provider answers on. What is missing
-is the endpoint that sums a conversation and exposes the figure. The numbers
-are all there; nothing adds them up over HTTP.
+Designed in full, contract and degradation included. Then not built. So the
+assistant answers without knowing anything about the account, and that is the
+one thing that would most change what a good answer looks like in this product.
+If one slice comes back first, it should be this one.
 
-**Provider fallback wired into the composition root.** The port takes two
-implementations and both Anthropic and Gemini pass the same contract suite, so
-this is wiring rather than a rewrite. Until it is wired, a provider outage is
-an outage.
+### The conversation cost endpoint
 
-**Full log field coverage.** One structured line per turn ships with
-conversation id, request id, latency, the three token figures, error class and
-redacted content. What was cut is auditing that every use case emits it.
+Usage is captured on every message, thinking tokens included. The pricing
+catalogue exists in the domain and keys correctly on the model snapshot the
+provider answers on. What is missing is the endpoint that sums a conversation
+and exposes the figure. All the numbers are there. Nothing adds them up over
+HTTP.
 
-**Past conversations.** Conversations persist and there is no screen listing
-them, so a user can start a new thread and cannot return to the old one. It is
-the only cut item that would add navigation to a product that currently has
-none, which is why it went rather than the others.
+### Provider fallback in the composition root
+
+The port takes two implementations, and Anthropic and Gemini both pass the same
+contract suite already. So this is wiring. Until it is wired, a provider outage
+is our outage.
+
+### Full log field coverage
+
+One structured line per turn ships today, carrying conversation id, request id,
+latency, the three token figures, error class and redacted content. What got
+cut was auditing that every use case emits it.
+
+### Past conversations
+
+Conversations persist and no screen lists them, so a user can start a new
+thread and never get back to the old one. Of the five this was the easiest to
+drop, because it is the only one that would have added navigation to a product
+that has none.
 
 ## Cut earlier, by decision
 
-**Live Control+ API integration.** There is no API contract available for the
-exercise, so the user context port returns fixed sample data. The interface is
-real and tested and the shape is my guess at their account model, which I've
-asked them to confirm. A real endpoint replaces one adapter and nothing else
-changes.
+### Live Control+ API integration
 
-**Human handoff and escalation.** The public material advertises fully
-automated protection, a support email, a phone number and a hosted help
-centre, and never establishes that a person answers. Building a routing path
-to a channel that might be automated would have been designing for an
-assumption. The assistant answers scam questions directly instead, and the
-support contact appears as a static link that routes nothing. If Control+
-confirms a staffed channel, the conversation aggregate can raise a domain
-event without a schema change.
+There is no API contract available for the exercise, so the user context port
+returns fixed sample data. The interface is real and tested. The shape is my
+guess at their account model, which I have asked them to confirm. A real
+endpoint replaces one adapter and nothing else moves.
 
-**Notifying the account administrator when something happens to a family
-member.** This needs a per-member consent model before it is safe to build. An
-adult member's private conversation being reported to another adult is a
-different question from a parent seeing a child's, and a build this short is not the place to answer it. The domain events already carry the member
-identity, so the notification is a subscriber.
+### Human handoff and escalation
 
-**Partial answers surviving a dropped connection.** A message is written once
-when the turn closes. Cancellation is unaffected, because stopping also closes
-the turn and the partial gets written. What is lost is the case where the
-process dies or the user drops off the network mid-stream. Roughly half an
-hour to fix, by inserting the row at stream start with a streaming state and
-updating on a throttle.
+The public material advertises fully automated protection, a support email, a
+phone number and a hosted help centre. It never establishes that a person
+answers. Building a routing path to a channel that might be automated would
+have meant designing for an assumption. So the assistant answers scam questions
+directly, and the support contact appears as a static link that routes nothing.
+If Control+ confirms a staffed channel, the conversation aggregate can raise a
+domain event without a schema change.
 
-**Persisting image bytes.** The message keeps media type, dimensions and a
-hash. A conversation cannot be fully reconstructed from the database, and a
-follow up about the same photo re-sends it. The production shape is object
-storage behind an attachment port.
+### Notifying the account administrator about a family member
 
-**The full monitoring stack.** Tracing, dashboards, alerting, and an evaluation
-pipeline built from real conversations. Structured logs with redaction ship
-now, and they carry latency, the three token counts, error class and redacted
-content, so the data to build the rest exists.
+This one needs a per-member consent model before it is safe to build. An adult
+member's private conversation being reported to another adult is a different
+question from a parent seeing a child's, and a build this short is no place to
+answer it. The domain events already carry the member identity, so the
+notification is a subscriber.
 
-**Retention policy, access control and field-level encryption.** Persistence is
-real, which is what makes this a real question rather than a hypothetical one.
-Content is already isolated behind the repository port.
+### Partial answers surviving a dropped connection
 
-**Rate limiting.** Nothing currently sits between a client and the provider
-bill.
+A message is written once, when the turn closes. Cancellation is unaffected,
+because stopping also closes the turn and the partial gets written. What is
+lost is the case where the process dies or the user drops off the network
+mid-stream. Roughly half an hour to fix: insert the row at stream start with a
+streaming state, then update on a throttle.
+
+### Persisting image bytes
+
+The message keeps media type, dimensions and a hash. So a conversation cannot
+be fully reconstructed from the database, and a follow up about the same photo
+re-sends it. The production shape is object storage behind an attachment port.
+
+### The full monitoring stack
+
+Tracing, dashboards, alerting, and an evaluation pipeline built from real
+conversations. Structured logs with redaction ship now, and they carry latency,
+the three token counts, error class and redacted content. The data to build the
+rest is there.
+
+### Retention policy, access control and field-level encryption
+
+Persistence is real, which is what makes this a real question and not a
+hypothetical. Content is already isolated behind the repository port.
+
+### Rate limiting
+
+Nothing currently sits between a client and the provider bill.
 
 ## Out of scope by the brief
 
-**Video attachments.** Message content is a list of typed parts, so video is a
-new part type and a new branch in prompt assembly, not a new message type.
+### Video attachments
 
-**Realtime voice to voice.** Not an extension of the current voice path. Voice
-today produces a text transcript on the device and the generation model is only
-ever spoken to in text. Realtime is a different transport, WebSocket or WebRTC,
-with no intermediate text, and the transport decision records what would
-change.
+Message content is a list of typed parts, so video is a new part type and a new
+branch in prompt assembly. Not a new message type.
 
-**Authentication, accounts and user management.** Explicitly not required. The
-context port takes an identifier and trusts it.
+### Realtime voice to voice
 
-## Cut and worth naming as a cost
+This does not extend the current voice path. Voice today produces a text
+transcript on the device, and the generation model is only ever spoken to in
+text. Realtime is a different transport, WebSocket or WebRTC, with no
+intermediate text. The transport decision records what would change.
 
-**The audio row of the provider comparison is measured by hand.** Voice is
+### Authentication, accounts and user management
+
+Explicitly not required. The context port takes an identifier and trusts it.
+
+## Cut, and worth naming as a cost
+
+The audio row of the provider comparison is measured by hand. Voice is
 transcribed on the device, so the transcription port has no product caller and
 exists for the evaluation. Running the fixture questions through it manually
-was a condition of that decision rather than an afterthought, because a port
-nothing executes is an omission dressed as design.
+was a condition of that decision. A port nothing executes is an omission
+dressed as design.
 
-**Behavioural verification against the live model.** There are tests that the
-scam check and the disclosure rule are present in the assembled prompt. There
-is no test that the model obeys them, and one probe showed a model skipping the
-scam check unprompted, which is why the rule is in the policy at all. Closing
-that gap needs an evaluation set built from real conversations.
+Behavioural verification against the live model is the other one. There are
+tests that the scam check and the disclosure rule are present in the assembled
+prompt. There is no test that the model obeys them, and one probe showed a
+model skipping the scam check unprompted, which is why the rule is in the
+policy at all. Closing that gap needs an evaluation set built from real
+conversations.

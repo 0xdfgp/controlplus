@@ -1,6 +1,6 @@
 # 03. Senior User Principles
 
-The target user is an older adult asking for help with technology, usually while already frustrated. These principles constrain architecture, they are not a design afterthought. A choice that makes the backend elegant and the wait ambiguous is the wrong choice.
+The target user is an older adult asking for help with technology, usually while already frustrated. These principles constrain architecture. They are not a design afterthought. A choice that makes the backend elegant and the wait ambiguous is the wrong choice.
 
 ## The user in your head
 
@@ -26,13 +26,13 @@ A product requirement and a legal one. Details and sources in `07-product-contex
 
 - Say it is an AI at the first point of contact, in plain words and large type. Not in a terms page, not in grey 11pt.
 - Keep a light but persistent indicator afterwards. A user of 80 forgets mid conversation what they are talking to, especially when the answers are good.
-- If the user asks whether they are talking to a person, the answer is no, unambiguously. That is a rule in the domain prompt policy and a test case, not a hope.
+- If the user asks whether they are talking to a person, the answer is no, unambiguously. That is a rule in the domain prompt policy and a test case. It is not a hope.
 - Show the published Control+ support contact as a static, always visible link. This is not a handoff and does not route anything: no escalation flow is in scope. It exists so a frightened user can always see that a way to reach the company exists.
 - Never imply the assistant is a Control+ employee, and never adopt a human name that would suggest it.
 
 ## State visibility
 
-The brief calls this out directly: the interface must be clear about whether the assistant is listening, uploading, processing, responding or has hit a problem. That is a state machine, driven by real events from the backend, not by optimistic guesses on the client.
+The brief calls this out directly: the interface must be clear about whether the assistant is listening, uploading, processing, responding or has hit a problem. That is a state machine, driven by real events from the backend, and not by optimistic guesses on the client.
 
 Each state needs a plain language label, not only a visual:
 
@@ -47,7 +47,7 @@ Each state needs a plain language label, not only a visual:
 | Cancelled | Partial answer stays visible, clearly marked as stopped |
 | Failed | Plain explanation and one large retry button |
 
-Design implication: if a pipeline step can take more than a second or two, the backend should surface it as a distinct event rather than letting the client sit on a generic spinner. That shapes the streaming protocol decision. Do not settle the transport before deciding what the user needs to be told.
+Design implication: if a pipeline step can take more than a second or two, the backend should surface it as a distinct event and not leave the client sitting on a generic spinner. That shapes the streaming protocol decision. Do not settle the transport before deciding what the user needs to be told.
 
 ## Answer quality rules
 
@@ -68,11 +68,11 @@ The assistant can see some Control+ account context (D6). Used well, it is the d
 
 - Bring context in when it changes the answer, not to prove it is there. "I can see your last scan was clean, so this is probably not a virus" is useful. Reciting their plan name is not.
 - Never reveal context the user did not raise, especially about other people on the account.
-- If the context is stale or missing, say so plainly rather than guessing.
+- If the context is stale or missing, say so plainly instead of guessing.
 
 ## Voice and photo specifics
 
-- Recording starts on an explicit tap, not a hold gesture. Press and hold is unreliable for shaky hands.
+- Recording starts on an explicit tap. Not a hold gesture: press and hold is unreliable for shaky hands.
 - Show the transcript before or alongside the answer, so a mis-transcription is visible and correctable.
-- Photo capture needs a retake option and a readability check. A blurry screenshot should produce "I can't quite read that, could you take it again?" rather than a confident wrong answer.
+- Photo capture needs a retake option and a readability check. A blurry screenshot should produce "I can't quite read that, could you take it again?" instead of a confident wrong answer.
 - Expect large uncropped screenshots and slow uploads. Downscale on device before sending.
